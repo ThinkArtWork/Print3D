@@ -35,7 +35,25 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 工作区默认 `~/.xprint`，可用 `--workspace` 或环境变量 `XPRINT_WORKSPACE` 覆盖（测试/多实例时建议覆盖）。`xprint config` 打印生效配置，密钥永远不出现。
 
-把 XPrint 接到 DSH：在 **Plugins → Add plugin** 里选择本仓库的 `dsh-xprint-mcp/` 目录（或让 agent 调 `plugin_manager` 的 `install_bundle`）。细节见 [dsh-xprint-mcp/README.md](dsh-xprint-mcp/README.md)。
+把 XPrint 接到 DSH 有两种方式，推荐第一种（不需要安装任何本地插件包）：
+
+**方式 A：官方 `mcp-manager`（推荐）**。DSH 自带 `@deepseek-ai/dsh-mcp-manager`，在 `Settings → MCP` 里加一条 stdio 服务器即可（命令必须是**绝对路径**，DSH 不会展开 `~`）:
+
+```json
+{
+  "xprint": {
+    "transport": "stdio",
+    "command": "/absolute/path/to/XPrint/.venv/bin/xprint",
+    "args": ["serve", "--stdio"],
+    "env": { "XPRINT_WORKSPACE": "/absolute/path/to/XPrint/.xprint" },
+    "enabled": true
+  }
+}
+```
+
+也可以直接写进 profile 的 `cordis.patch.yml`（`id: mcp` 的 `config.servers`；注意 profile 里是**整表替换**继承来的 servers），重启 DSH 生效。
+
+**方式 B：自定义 bundle**。在 **Plugins → Add plugin** 里选择本仓库的 `dsh-xprint-mcp/` 目录（或让 agent 调 `plugin_manager` 的 `install_bundle`），细节见 [dsh-xprint-mcp/README.md](dsh-xprint-mcp/README.md)。
 
 之后在会话里直接调用 `mcp__xprint__system_status`、`mcp__xprint__capabilities` 等工具。
 

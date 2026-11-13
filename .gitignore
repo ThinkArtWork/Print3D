@@ -16,6 +16,7 @@ dist/
 build/
 
 # runtime workspace (if pointed inside the repo)
+.xprint/
 jobs/
 assets/
 cache/
