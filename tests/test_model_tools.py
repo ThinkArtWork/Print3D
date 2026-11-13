@@ -377,3 +377,114 @@ def test_asset_export_requires_a_build(workspace) -> None:
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
     assert "model_build" in payload["error"]["hint"]
+
+
+def test_blender_run_rejects_a_non_bpy_script(workspace) -> None:
+    runtime = _runtime(workspace)
+    payload = call(
+        runtime,
+        "blender_run",
+        {"script": "print('hi')\n", "name": "scene", "confirm": "BLENDER scene"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert not list(workspace.assets_dir.glob("*")) if workspace.assets_dir.exists() else True
+
+
+def test_blender_run_requires_exact_confirm(workspace) -> None:
+    runtime = _runtime(workspace)
+    payload = call(
+        runtime,
+        "blender_run",
+        {
+            "script": "import bpy\nbpy.ops.mesh.primitive_cube_add()\n",
+            "name": "scene",
+            "confirm": "BLENDER",
+        },
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "confirmation_mismatch"
+
+
+def test_generate_local_rejects_unknown_provider(workspace) -> None:
+    runtime = _runtime(workspace)
+    payload = call(
+        runtime,
+        "generate_local",
+        {"provider": "nope", "name": "cube", "confirm": "LOCAL cube", "prompt": "a cube"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "providers.local" in (payload["error"]["hint"] or "")
+
+
+def test_generate_local_runs_a_provider_and_creates_an_asset(workspace, tmp_path) -> None:
+    import sys
+
+    provider = tmp_path / "provider.py"
+    provider.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        f"sys.path.insert(0, {str(Path.cwd() / 'tests')!r})\n"
+        "from stl_helpers import binary_stl_bytes\n"
+        "Path(os.environ['XPRINT_LOCAL_OUT'], 'mesh.stl').write_bytes(binary_stl_bytes())\n",
+        encoding="utf-8",
+    )
+    provider.chmod(0o755)
+
+    config = {
+        "providers": {
+            "local": {
+                "fake": {
+                    "adapter": "fake",
+                    "mode": "both",
+                    "command": [sys.executable, str(provider)],
+                    "args": ["--prompt", "{prompt}", "--out", "{outdir}"],
+                    "timeout_s": 30,
+                }
+            }
+        }
+    }
+    workspace.config_path.write_text(json.dumps(config), encoding="utf-8")
+    runtime = _runtime(workspace)
+
+    submitted = call(
+        runtime,
+        "generate_local",
+        {
+            "provider": "fake",
+            "name": "tetra",
+            "confirm": "LOCAL tetra",
+            "prompt": "a tetrahedron",
+        },
+    )
+    assert submitted["ok"] is True
+    job_id = submitted["job_id"]
+
+    import time
+
+    deadline = time.monotonic() + 15
+    status = None
+    while time.monotonic() < deadline:
+        status = call(runtime, "job_status", {"job_id": job_id})
+        if status["job"]["state"] in {"succeeded", "failed", "cancelled"}:
+            break
+        time.sleep(0.05)
+
+    assert status is not None
+    assert status["job"]["state"] == "succeeded", status
+    assert status["job"]["result"]["checks"]["triangles"] == 4
+    assets = call(runtime, "asset_list", {})
+    assert any(item["name"] == "tetra" for item in assets["assets"])
+
+
+def test_generate_local_requires_prompt_or_image(workspace) -> None:
+    runtime = _runtime(workspace)
+    payload = call(
+        runtime,
+        "generate_local",
+        {"provider": "fake", "name": "cube", "confirm": "LOCAL cube"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"

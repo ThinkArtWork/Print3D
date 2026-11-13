@@ -78,7 +78,7 @@ class AssetStore:
         return self.asset_dir(asset_id) / revision
 
     # -- lifecycle -------------------------------------------------------
-    def create(self, name: str) -> dict[str, Any]:
+    def create(self, name: str, *, kind: str = "build123d") -> dict[str, Any]:
         name = validate_name(name)
         asset_id = new_asset_id()
         directory = self.asset_dir(asset_id)
@@ -86,6 +86,7 @@ class AssetStore:
         manifest = {
             "asset_id": asset_id,
             "name": name,
+            "kind": kind,
             "created_at": _iso(),
             "updated_at": _iso(),
             "revisions": [],
@@ -193,6 +194,7 @@ class AssetStore:
         artifacts: dict[str, Path] | None = None,
         reference: Path | None = None,
         reference_meta: dict[str, Any] | None = None,
+        kind: str = "build123d",
     ) -> dict[str, Any]:
         """Write the script, provenance and build artifacts; return the revision.
 
@@ -253,6 +255,7 @@ class AssetStore:
             "prompt": prompt,
             "model": model,
             "modeler": modeler,
+            "kind": kind,
             "created_at": _iso(),
             "script_sha256": digest,
             "usage": usage or {},
@@ -273,6 +276,7 @@ class AssetStore:
             "created_at": params["created_at"],
             "model": model,
             "modeler": modeler,
+            "kind": kind,
             "script": f"{revision}/{SCRIPT}",
             "sha256": digest,
             "prompt": prompt,

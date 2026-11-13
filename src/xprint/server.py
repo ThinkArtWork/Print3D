@@ -22,6 +22,8 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 
 from . import __version__
 from .assets import AssetStore, validate_asset_id, validate_name
+from .blender import run_blender
+from .blender_policy import check_blender_script
 from .cad import run_script
 from .capabilities import build_capabilities, build_system_status
 from .config import ImageProviderSettings, LoadedConfig, Secrets, load_all
@@ -36,8 +38,12 @@ from .errors import (
 )
 from .images import MAX_IMAGE_BYTES, GeneratedImage, ReferenceStore, sniff_image_mime
 from .jobs import Job, JobStore, sha256_file
+from .local_mesh import DEFAULT_TIMEOUT_S as LOCAL_GENERATION_TIMEOUT
+from .local_mesh import run_local
+from .mesh import stats_for_stl
 from .preview import DEFAULT_VIEWS, render_views
 from .registry import Registry, builtin_registry
+from .runner import JobRunner
 from .script_policy import check_script, summarise
 from .workspace import Workspace, atomic_write_bytes
 
@@ -77,6 +83,18 @@ Two modelling paths, both stored as versioned assets:
 `model_show` returns a stored revision's script and provenance.  Built artifacts
 (model.stl, model.step) live in the workspace; previews are returned inline as
 PNG content.
+
+Two extra engines reuse the same asset + preview loop:
+
+- `blender_run` executes a bpy scene script with Blender in background mode,
+  exports model.stl/model.glb and returns the same geometry checks.  Use it for
+  text-to-3D when Blender's modelling tools fit better than build123d; for
+  image-to-3D, look at the attached image yourself and write the scene.
+- `generate_local` runs a user-installed local generator (configured under
+  providers.local.<id>) as a background job; poll `job_status`, then preview the
+  produced asset.  XPrint downloads no weights and calls no cloud API.
+
+Both accept `image=` for image-driven work; assets remember the reference.
 """
 
 
@@ -90,6 +108,7 @@ class Runtime:
     store: JobStore
     registry: Registry
     writes: list[str] = field(default_factory=list)
+    runner: JobRunner | None = None
 
     @classmethod
     def create(
@@ -101,12 +120,14 @@ class Runtime:
     ) -> Runtime:
         ws = workspace or Workspace()
         loaded, secrets = load_all(path=config_path, workspace=ws.root)
+        store = JobStore(ws)
         return cls(
             workspace=ws,
             loaded=loaded,
             secrets=secrets,
-            store=JobStore(ws),
+            store=store,
             registry=registry or builtin_registry(),
+            runner=JobRunner(store),
         )
 
     def record_write(self, what: str) -> None:
@@ -533,6 +554,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 )
             assets = AssetStore(rt.workspace)
             manifest = assets.load(asset_id)
+            if manifest.get("kind", "build123d") != "build123d":
+                raise InvalidArgument(
+                    f"Asset {asset_id} was produced by {manifest.get('kind')} and has no build123d script",
+                    hint="Use model_preview or asset_export for this asset, then blender_run/generate_local to add a revision.",
+                )
             target = revision or assets.latest_revision(manifest)
             if not target:
                 raise InvalidArgument(
@@ -720,6 +746,289 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 ),
             }
             return _image_result(payload, images)
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="blender_run",
+        description=(
+            "Turn a bpy Python script into a printable mesh by running Blender in "
+            "background mode (blender -b --factory-startup --python scene.py), then "
+            "exporting every mesh object to model.stl + model.glb and inspecting it. "
+            "This is the Blender path for text-to-3D: the client model writes the "
+            "scene (primitive_*, bmesh, solidify, remesh, ...); for image-to-3D it "
+            "looks at the attached image itself and the script can read the same "
+            "file from sys.argv after '--'. Pass asset_id to append a new revision "
+            "to an existing Blender asset. WRITES files and executes code in "
+            "Blender: confirm must be exactly 'BLENDER <name>' or 'BLENDER <asset_id>'."
+        ),
+    )
+    def blender_run(
+        script: str,
+        confirm: str,
+        name: str = "",
+        asset_id: str = "",
+        image: str = "",
+        blender_path: str = "",
+        timeout_s: int = 0,
+    ) -> dict[str, Any]:
+        try:
+            token = validate_asset_id(asset_id) if asset_id else validate_name(name)
+            expected = f"BLENDER {token}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+
+            issues = check_blender_script(script)
+            errors = [issue.as_dict() for issue in issues if issue.severity == "error"]
+            if errors:
+                raise InvalidArgument(
+                    "The bpy script failed safety checks; nothing was executed",
+                    details={"issues": errors},
+                )
+
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(asset_id) if asset_id else assets.create(name, kind="blender")
+            if manifest.get("kind") != "blender":
+                raise InvalidArgument(
+                    f"Asset {manifest['asset_id']} was built with {manifest.get('kind') or 'build123d'}",
+                    hint="Use model_write/model_build for build123d assets, or pass name= to create a new Blender asset.",
+                )
+
+            image_path: Path | None = None
+            if image:
+                image_path = Path(image).expanduser().resolve()
+                if not image_path.is_file():
+                    raise NotFound(
+                        f"Image not found: {image_path}",
+                        hint="Pass a PNG/JPEG/WebP path or omit image=.",
+                    )
+                if not sniff_image_mime(image_path.read_bytes()):
+                    raise InvalidArgument(
+                        f"Not a PNG/JPEG/WebP image: {image_path.name}",
+                        hint="Convert the reference to PNG or JPEG first.",
+                    )
+
+            checks = summarise(issues)
+            record = assets.add_revision(
+                manifest["asset_id"],
+                script,
+                prompt="",
+                model="blender",
+                modeler="blender",
+                checks={"policy": checks},
+                reference=image_path,
+                reference_meta={"source_path": str(image_path)} if image_path else None,
+                kind="blender",
+            )
+            revision = record["revision"]
+            render = rt.loaded.config.render
+            workdir = rt.workspace.safe_path(
+                f"cache/blender/{manifest['asset_id']}_{revision}_{secrets.token_hex(4)}",
+                create_parents=True,
+            )
+            result = run_blender(
+                script,
+                workdir=workdir,
+                image=image_path,
+                blender_path=blender_path or render.blender_path,
+                timeout_s=float(timeout_s or render.timeout_s),
+            )
+
+            stored: dict[str, Path] = {}
+            for stored_name, value in result.artifacts.items():
+                path = Path(value)
+                if path.is_file():
+                    stored[Path(stored_name).name] = path
+            if stored:
+                assets.record_build(
+                    manifest["asset_id"],
+                    revision,
+                    build=result.to_dict(),
+                    artifacts=stored,
+                )
+                rt.record_write(f"assets/{manifest['asset_id']}/{revision}/model.stl")
+
+            hint = (
+                "Review checks and call model_preview; fix scene.py and call "
+                "blender_run with asset_id to add the next revision."
+                if result.ok
+                else "Read stderr_tail, fix scene.py, then call blender_run again with asset_id."
+            )
+            return {
+                "ok": result.ok,
+                "writes_performed": True,
+                "asset_id": manifest["asset_id"],
+                "revision": revision,
+                "engine": "blender",
+                "exit_code": result.exit_code,
+                "duration_s": round(result.duration_s, 2),
+                "timed_out": result.timed_out,
+                "checks": result.checks,
+                "artifacts": sorted(stored),
+                "error": result.error,
+                "stdout_tail": result.stdout[-1500:],
+                "stderr_tail": result.stderr[-1500:],
+                "hint": hint,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="generate_local",
+        description=(
+            "Run a user-installed local 3D generator in the background. The provider "
+            "is configured in providers.local.<id> as a command + args template with "
+            "{prompt}, {image}, {outdir}, {name} placeholders; it must write "
+            '<outdir>/mesh.stl (or print {"mesh": path}). XPrint creates the asset '
+            "from the produced STL, records real geometry checks and returns a "
+            "job_id: poll job_status until succeeded, then call model_preview. "
+            "No weights are downloaded and no cloud API is called. WRITES files and "
+            "runs the provider command: confirm must be exactly 'LOCAL <name>'."
+        ),
+    )
+    def generate_local(
+        provider: str,
+        name: str,
+        confirm: str,
+        prompt: str = "",
+        image: str = "",
+        timeout_s: int = 0,
+    ) -> dict[str, Any]:
+        try:
+            name = validate_name(name)
+            expected = f"LOCAL {name}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            if not prompt.strip() and not image:
+                raise InvalidArgument(
+                    "Provide prompt, image, or both",
+                    hint="Local providers are text-to-3D, image-to-3D, or both.",
+                )
+
+            entry = rt.loaded.config.providers.local.get(provider)
+            if entry is None:
+                raise InvalidArgument(
+                    f"Unknown local provider: {provider}",
+                    hint=(
+                        "Add providers.local.<id> to config.json with command/args; "
+                        "run `xprint config` to see the current file."
+                    ),
+                    details={"configured": sorted(rt.loaded.config.providers.local)},
+                )
+            if not entry.get("enabled", True):
+                raise AdapterUnavailable(
+                    f"Local provider {provider!r} is disabled",
+                    hint="Set providers.local.<id>.enabled to true.",
+                )
+
+            mode = "both" if prompt.strip() and image else ("image" if image else "text")
+            declared = str(entry.get("mode") or "both")
+            if declared not in {"text", "image", "both"}:
+                raise ConfigError(
+                    f"providers.local.{provider}.mode must be text, image or both",
+                    hint="Fix config.json and retry.",
+                )
+            if declared != "both" and declared != mode:
+                raise InvalidArgument(
+                    f"Provider {provider!r} only supports {declared}-to-3D",
+                    hint=f"Pass {'prompt' if declared == 'text' else 'image'} instead.",
+                )
+
+            image_path: Path | None = None
+            if image:
+                image_path = Path(image).expanduser().resolve()
+                if not image_path.is_file():
+                    raise NotFound(
+                        f"Image not found: {image_path}",
+                        hint="Import the picture first (reference_import) or pass a valid path.",
+                    )
+                if not sniff_image_mime(image_path.read_bytes()):
+                    raise InvalidArgument(
+                        f"Not a PNG/JPEG/WebP image: {image_path.name}",
+                        hint="Convert the reference to PNG or JPEG first.",
+                    )
+
+            budget = float(timeout_s or entry.get("timeout_s") or LOCAL_GENERATION_TIMEOUT)
+            if budget <= 0:
+                raise InvalidArgument("timeout must be positive")
+
+            def work(job_id: str) -> dict[str, Any]:
+                outdir = rt.workspace.safe_path(f"cache/local/{job_id}", create_parents=True)
+                result = run_local(
+                    provider,
+                    entry,
+                    prompt=prompt,
+                    image=image_path,
+                    outdir=outdir,
+                    name=name,
+                    mode=mode,
+                    timeout_s=budget,
+                )
+                if not result.ok or not result.mesh:
+                    raise AdapterUnavailable(
+                        result.error or f"Local provider {provider!r} failed",
+                        hint=result.hint,
+                        details={
+                            "provider": provider,
+                            "exit_code": result.exit_code,
+                            "timed_out": result.timed_out,
+                            "stdout_tail": result.stdout[-1500:],
+                            "stderr_tail": result.stderr[-1500:],
+                        },
+                    )
+                checks = stats_for_stl(result.mesh)
+                checks["engine"] = f"local:{provider}"
+                assets = AssetStore(rt.workspace)
+                manifest = assets.create(name, kind="local")
+                record = assets.add_revision(
+                    manifest["asset_id"],
+                    "# local generator: no script is produced\n",
+                    prompt=prompt,
+                    model=f"local:{provider}",
+                    modeler="local",
+                    usage={"command": result.command, "duration_s": round(result.duration_s, 2)},
+                    checks=checks,
+                    reference=image_path,
+                    reference_meta=(
+                        {"source_path": str(image_path), "mode": mode} if image_path else None
+                    ),
+                    artifacts={"model.stl": Path(result.mesh)},
+                    kind="local",
+                )
+                rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.stl")
+                return {
+                    "asset_id": manifest["asset_id"],
+                    "name": name,
+                    "revision": record["revision"],
+                    "provider": provider,
+                    "mode": mode,
+                    "duration_s": round(result.duration_s, 2),
+                    "checks": checks,
+                    "artifacts": sorted(record.get("artifacts", {})),
+                }
+
+            runner = rt.runner or JobRunner(rt.store)
+            job = runner.submit(
+                "local.generate",
+                work,
+                params={"provider": provider, "name": name, "mode": mode},
+                provider=provider,
+            )
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "job_id": job.id,
+                "provider": provider,
+                "mode": mode,
+                "timeout_s": budget,
+                "hint": "Poll job_status(job_id); on success call model_preview(asset_id).",
+            }
         except XPrintError as exc:
             return tool_error(exc)
 

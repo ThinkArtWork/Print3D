@@ -49,11 +49,24 @@ def probe_providers(cfg: LoadedConfig, secrets: Secrets) -> dict[str, Any]:
         )
     local = []
     for provider_id, entry in sorted(config.providers.local.items()):
+        command = entry.get("command")
+        tokens = (
+            command
+            if isinstance(command, list)
+            else ([command] if isinstance(command, str) else [])
+        )
+        executable = str(tokens[0]) if tokens else None
+        available = bool(executable) and (
+            Path(executable).expanduser().is_file() or bool(shutil.which(executable))
+        )
         local.append(
             {
                 "id": provider_id,
                 "adapter": str(entry.get("adapter", provider_id)),
-                "base_url": entry.get("base_url"),
+                "mode": str(entry.get("mode") or "both"),
+                "enabled": bool(entry.get("enabled", True)),
+                "command": executable,
+                "available": available,
                 "configured": True,
             }
         )
@@ -225,6 +238,9 @@ def build_capabilities(
             "cloud_providers_usable": len(providers["usable"]),
             "image_providers_ready": sum(1 for item in images if item["ready"]),
             "local_providers": len(providers["local"]),
+            "local_providers_ready": sum(
+                1 for item in providers["local"] if item["available"] and item["enabled"]
+            ),
             "cad_available": cad["available"],
             "render_available": render["available"],
             "slicers_available": sum(1 for item in slicers if item["available"]),

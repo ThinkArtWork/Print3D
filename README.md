@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染，以及 **11 个工具**。切片与打印适配器在 M2 之后接入。
+> 状态：**M0 + 建模闭环已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染，以及 **13 个工具**（含 Blender bpy 与本地生成器两条额外路径）。切片与打印适配器在 M2 之后接入。
 
 ## 文档
 
@@ -92,6 +92,56 @@ reference_import(path, confirm="IMPORT <name>")       # 或导入用户上传的
 
 XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态）自己看，XPrint 负责把图片存成 reference、附到版本上、并在预览时回传。参考图看不到的背面、内部结构和精确尺寸，需要宿主模型在 `prompt` 里补充或用文字提问。
 
+### 路径三：Blender（bpy 场景脚本）
+
+适合有机形状、倒角/布尔/阵列和 Blender 自带的建模工具；不需要安装 build123d。
+
+```text
+宿主模型写 bpy 脚本（primitive_* / bmesh / 修改器）
+   → blender_run(script, confirm="BLENDER <name>")   # 先过 bpy 静态审查
+   → Blender 后台模式执行：-b --factory-startup --python-exit-code 1
+   → 导出所有 MESH 对象为 model.stl + model.glb
+   → 同样的 geometry checks（watertight/bbox/volume/边计数）
+   → model_preview(asset_id)；改成新版本则传 asset_id
+```
+
+- 版本可追加：`blender_run(asset_id=<id>, confirm="BLENDER <asset_id>")` 存为 `v002`、`v003`…；资产 `kind` 为 `blender`，不能与 `model_build` 混用。
+- 图片输入：`blender_run(image=<path>)` 把参考图复制到该版本；脚本可在 `sys.argv` 的 `--` 之后拿到同一路径，宿主模型也可以直接看 MCP 返回的图片内容。
+- 实测（Blender 5.3.0，M1）：20 mm 立方体 + 直径 6 mm 通孔，整个 Blender 进程 0.9–1.1 s，四视图预览正常。
+- 导出脚本只认 `MESH` 对象，**布尔切割用的辅助对象记得删除**，否则会一起导出（预览/bbox 会暴露这种残留）。
+
+### 路径四：本地生成器（通用命令适配器）
+
+不下载模型权重，也不绑定某个框架：任何能读提示词/图片、写出 STL 的本地命令都能接进来。
+
+```json
+// ~/.xprint/config.json —— providers.local.<id>
+{
+  "providers": {
+    "local": {
+      "triposr": {
+        "adapter": "triposr",
+        "mode": "image",                       // text | image | both
+        "command": ["/opt/triposr/.venv/bin/python", "/opt/triposr/run.py"],
+        "args": ["--image", "{image}", "--out", "{outdir}", "--name", "{name}"],
+        "timeout_s": 600
+      }
+    }
+  }
+}
+```
+
+```text
+generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>")
+   → 后台任务（job_id）
+   → 命令在 clean env 中运行，cwd=<outdir>，可读 XPRINT_LOCAL_OUT
+   → 必须写出 <outdir>/mesh.stl（或 stdout 打印 {"mesh": "/path/model.stl"}）
+   → XPrint 建资产（kind=local）、算 geometry checks、附 reference
+   → job_status 轮询 → model_preview(asset_id)
+```
+
+占位符：`{prompt}` `{image}` `{outdir}` `{name}` `{mode}`；`command`/`args` 可以是列表或 shell 字符串（字符串按 `shlex` 切分，不经过 shell）。`capabilities.providers.local` 会显示命令是否存在、是否启用以及 `mode`。
+
 ## 工具
 
 | 工具 | 写操作 | 说明 |
@@ -101,6 +151,8 @@ XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态
 | `job_status` | 否 | 按 `job_id` 查询任务；未知 id 返回 `job_not_found` |
 | `asset_list` | 否 | 列出资产与版本数 |
 | `model_show` | 否 | 读回资产清单、指定版本源码、`params.json` 与 reference |
+| `blender_run` | 是 | 用 Blender 后台模式执行 bpy 脚本，导出 STL/GLB 并检查；`confirm` 精确为 `BLENDER <name>` / `BLENDER <asset_id>` |
+| `generate_local` | 是 | 后台运行 `providers.local.<id>` 命令生成 STL，建资产并返回 `job_id`；`confirm` 精确为 `LOCAL <name>` |
 | `image_generate` | 是 | 文生概念图并存入 `references/`；`confirm` 精确为 `IMAGE <name>`，图片内联返回 |
 | `reference_import` | 是 | 把用户已有的草图/照片导入为 reference；`confirm` 精确为 `IMPORT <name>` |
 | `model_write` | 是 | 存入 build123d 脚本（新建或追加版本，可带 reference）；`confirm` 精确为 `WRITE <name>` / `WRITE <asset_id>` |
@@ -115,7 +167,7 @@ XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态
 1. **只读工具免费**：`capabilities`、`system_status`、`job_status`、`asset_list`、`model_show` 不需要确认，且明确返回 `writes_performed: false`；`model_preview` 只写预览缓存。
 2. **写操作必须精确确认**：确认串逐字符比较，错了返回 `confirmation_mismatch` 且不写任何文件。
 3. **路径沙箱**：除 `reference_import`（只读用户给的图片路径）和 `asset_export`（只写用户指定的目标）外，所有路径经 `safe_path()` 解析符号链接后校验，逃出工作区一律 `path_outside_workspace`。
-4. **脚本策略 + 执行沙箱**：任何脚本先过 AST 审查（禁 `os/pathlib/subprocess/socket/shutil/ctypes/requests/urllib/http/multiprocessing`、禁 `eval/exec/open`…），再在 `cad_worker.py` 子进程里执行：RLIMIT_CPU/FSIZE/NOFILE、独立进程组、超时 SIGKILL、环境变量剔除密钥。静态审查是纵深防御，不是沙箱；真正的隔离边界是子进程 + 资源限额。
+4. **脚本策略 + 执行沙箱**：build123d 脚本先过 AST 审查（禁 `os/pathlib/subprocess/socket/shutil/ctypes/requests/urllib/http/multiprocessing`、禁 `eval/exec/open`…），再在 `cad_worker.py` 子进程里执行：RLIMIT_CPU/FSIZE/NOFILE、独立进程组、超时 SIGKILL、环境变量剔除密钥。bpy 脚本同样先过静态审查（同样禁网络/进程/文件模块，必须使用 `bpy`），再由 `blender -b --factory-startup` 子进程执行，使用独立的 Blender 配置目录、超时杀进程组。`generate_local` 运行的是用户自己配置的命令，环境变量剔除密钥并带超时；这是「用户信任本机命令」的显式边界。静态审查是纵深防御，不是沙箱；真正的隔离边界是子进程 + 资源限额。
 5. **不开放任意 G-code**：切片产物先检查再发送，`printer_*` 只接受切片器产物。
 6. **密钥**：只从环境变量或 `~/.xprint/secrets.json`（0600）读取；日志与工具输出统一脱敏。
 
@@ -127,7 +179,7 @@ XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态
 .venv/bin/python -m ruff format src tests
 ```
 
-测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、`model_write`/`model_build`/`model_preview`/`asset_export`/`reference_import`、MCP stdio 握手与 HTTP Bearer 鉴权。
+测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`asset_export`/`reference_import`/`blender_run`/`generate_local`、MCP stdio 握手与 HTTP Bearer 鉴权。
 
 ## 目录
 
@@ -135,7 +187,7 @@ XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态
 XPrint/
   pyproject.toml
   src/xprint/
-    server.py          # MCP 入口（stdio / streamable HTTP）+ 11 个工具
+    server.py          # MCP 入口（stdio / streamable HTTP）+ 13 个工具
     cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|image|preview
     config.py          # config.json / secrets / 环境变量优先级
     workspace.py       # ~/.xprint 布局 + safe_path 沙箱
@@ -160,12 +212,15 @@ XPrint/
 | --- | --- |
 | 对话式创作 | ✅ 宿主模型驱动 `model_write`/`model_build`/`model_preview`；每轮是同一资产的新版本 |
 | 图片理解 | ✅ 多模态宿主模型看图 + `reference_import`/`image_generate` 存 reference，预览时回传对比 |
+| Blender 文/图生 3D | ✅ `blender_run`（bpy 脚本 → STL/GLB + 四视图）；图生 3D 由宿主模型看图写场景 |
+| 本地模型文/图生 3D | ✅ `generate_local` 通用命令适配器（TripoSR / Hunyuan3D / ComfyUI 等，以本机命令为准） |
 | 云端图生 3D（Tripo/混元） | ⏳ 未实现：`capabilities` 已探测 key；下一步接 `generate_cloud` 异步任务 |
 | 导出模型文件 | ✅ `asset_export`（STL/STEP/脚本） |
 | 切片 + 发送打印机 | ⏳ 未实现：M2 切片适配、M3 打印机 CRUD + 发送 |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。
 - **M0.5（完成，2026-11-14）**：沙箱化 build123d 执行器、概念图生成、四视图预览、两条建模闭环、导出、11 个工具。
+- **M0.6（完成，2026-11-14）**：Blender bpy 路径（`blender_run`）与本地生成器适配器（`generate_local` + 后台任务），13 个工具。
 - **M1**：云端图生 3D（Hunyuan/Tripo）异步任务与导入；图像 provider 扩展。
 - **M2**：切片器适配（Orca/Bambu 外部进程，profile 运行时读取）与产物审计。
 - **M3**：打印机 CRUD（Moonraker / PrusaLink）、`send` + 审批流。

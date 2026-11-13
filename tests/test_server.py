@@ -36,7 +36,9 @@ def test_handshake_and_tools_list() -> None:
     assert sorted(t.name for t in listing.tools) == [
         "asset_export",
         "asset_list",
+        "blender_run",
         "capabilities",
+        "generate_local",
         "image_generate",
         "job_status",
         "model_build",

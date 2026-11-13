@@ -76,8 +76,9 @@ class CadSettings(BaseModel):
 class RenderSettings(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    backend: str = "blender_bpy"
+    backend: str = "blender_cli"
     blender_path: str | None = None
+    timeout_s: float = Field(300.0, gt=1, le=1800)
 
 
 class TargetSettings(BaseModel):
@@ -192,7 +193,7 @@ def default_config_dict(workspace: str = DEFAULT_WORKSPACE) -> dict[str, Any]:
             "python": None,
             "timeout_s": 120,
         },
-        "render": {"backend": "blender_bpy", "blender_path": None},
+        "render": {"backend": "blender_cli", "blender_path": None, "timeout_s": 300},
         "targets": {},
         "printers": [],
     }
