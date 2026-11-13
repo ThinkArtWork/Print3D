@@ -43,6 +43,25 @@ class GeneratedScript:
     raw_chars: int = 0
 
 
+@dataclass
+class ChatReply:
+    """One assistant turn, including any tool calls, as returned by the model."""
+
+    message: dict[str, Any]
+    usage: dict[str, Any] = field(default_factory=dict)
+    finish_reason: str | None = None
+    elapsed_s: float = 0.0
+
+    @property
+    def content(self) -> str:
+        return str(self.message.get("content") or "")
+
+    @property
+    def tool_calls(self) -> list[dict[str, Any]]:
+        calls = self.message.get("tool_calls") or []
+        return [call for call in calls if isinstance(call, dict)]
+
+
 def extract_code(content: str) -> str:
     """Pull the CAD script out of a chat reply.
 
@@ -122,11 +141,7 @@ class KimiModeler:
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
 
-    def complete(self, messages: list[dict[str, Any]]) -> tuple[str, dict[str, Any], str | None]:
-        payload: dict[str, Any] = {"model": self.model, "messages": messages}
-        if self.reasoning_effort:
-            payload["reasoning_effort"] = self.reasoning_effort
-
+    def _post(self, payload: dict[str, Any]) -> tuple[dict[str, Any], float]:
         started = time.monotonic()
         try:
             with self._client() as client:
@@ -170,20 +185,57 @@ class KimiModeler:
 
         try:
             data = response.json()
+        except ValueError as exc:
+            raise AdapterUnavailable(
+                "Kimi returned a non-JSON response",
+                hint="Retry; if it persists, check modelers.kimi.base_url.",
+                details={"provider": "kimi", "body": response.text[:200]},
+            ) from exc
+        if not isinstance(data, dict):
+            raise AdapterUnavailable(
+                "Kimi returned an unexpected response shape",
+                hint="Retry; if it persists, the API contract may have changed.",
+                details={"provider": "kimi"},
+            )
+        return data, elapsed
+
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+    ) -> ChatReply:
+        """One completion request, returning the raw assistant message.
+
+        The raw message is what must be appended to the conversation verbatim
+        when the assistant called tools; reconstructing it loses ``tool_calls``
+        and ``reasoning_content`` and breaks the follow-up turn.
+        """
+
+        payload: dict[str, Any] = {"model": self.model, "messages": messages}
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        if tools:
+            payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+
+        data, elapsed = self._post(payload)
+        try:
             choice = data["choices"][0]
-            content = choice["message"].get("content") or ""
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as exc:
             raise AdapterUnavailable(
                 "Kimi returned an unexpected response shape",
                 hint="Retry; if it persists, the API contract may have changed.",
                 details={"provider": "kimi"},
             ) from exc
-
-        if not content.strip():
+        if not isinstance(message, dict):
             raise AdapterUnavailable(
-                "Kimi returned an empty message",
-                hint="Retry with a more specific prompt.",
-                details={"provider": "kimi", "usage": data.get("usage", {})},
+                "Kimi returned an unexpected response shape",
+                hint="Retry; if it persists, the API contract may have changed.",
+                details={"provider": "kimi"},
             )
 
         usage = {
@@ -192,7 +244,23 @@ class KimiModeler:
             "total_tokens": data.get("usage", {}).get("total_tokens"),
             "elapsed_s": round(elapsed, 2),
         }
-        return content, usage, choice.get("finish_reason")
+        reply = ChatReply(
+            message=message,
+            usage=usage,
+            finish_reason=choice.get("finish_reason"),
+            elapsed_s=round(elapsed, 2),
+        )
+        if not reply.content.strip() and not reply.tool_calls:
+            raise AdapterUnavailable(
+                "Kimi returned an empty message",
+                hint="Retry with a more specific prompt.",
+                details={"provider": "kimi", "usage": usage},
+            )
+        return reply
+
+    def complete(self, messages: list[dict[str, Any]]) -> tuple[str, dict[str, Any], str | None]:
+        reply = self.chat(messages)
+        return reply.content, reply.usage, reply.finish_reason
 
     # -- public ----------------------------------------------------------
     def generate(

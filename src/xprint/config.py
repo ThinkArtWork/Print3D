@@ -57,6 +57,7 @@ class ModelerSettings(BaseModel):
     reasoning_effort: str | None = "high"
     timeout_s: float = Field(default=180.0, gt=1, le=900)
     api_key_env: str = "MOONSHOT_API_KEY"
+    max_rounds: int = Field(default=4, ge=1, le=10)
 
 
 class CadSettings(BaseModel):
@@ -64,6 +65,8 @@ class CadSettings(BaseModel):
 
     backend: str = "text2cad"
     cad_server_version: str | None = None
+    python: str | None = None
+    timeout_s: float = Field(default=120.0, gt=1, le=600)
 
 
 class RenderSettings(BaseModel):
@@ -176,9 +179,15 @@ def default_config_dict(workspace: str = DEFAULT_WORKSPACE) -> dict[str, Any]:
                 "reasoning_effort": "high",
                 "timeout_s": 180,
                 "api_key_env": "MOONSHOT_API_KEY",
+                "max_rounds": 4,
             },
         },
-        "cad": {"backend": "text2cad", "cad_server_version": "0.11.10"},
+        "cad": {
+            "backend": "text2cad",
+            "cad_server_version": "0.11.10",
+            "python": None,
+            "timeout_s": 120,
+        },
         "render": {"backend": "blender_bpy", "blender_path": None},
         "targets": {},
         "printers": [],

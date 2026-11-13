@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
-from .assets import AssetStore, validate_name
+from .agent import ModelingAgent
+from .assets import AssetStore, validate_asset_id, validate_name
+from .cad import run_script
 from .capabilities import build_capabilities, build_system_status
 from .config import LoadedConfig, Secrets, load_all
 from .errors import (
@@ -49,6 +53,15 @@ Safety contract:
 
 Start with `capabilities` to learn which providers, CAD backends, slicers and
 printers are available on this host.
+
+Two modelling paths, both versioned as assets:
+
+1. Bring your own model (no LLM inside XPrint): you write a build123d script,
+   call `model_write` to store it, `model_build` to execute it and read the real
+   geometry checks, then revise with another `model_write`/`model_build` pair
+   until the part is watertight.  `model_show` returns the stored script.
+2. Let XPrint drive a modeler: `model_generate` runs a closed loop with the
+   configured modeler (Kimi by default), which needs an API key.
 """
 
 
@@ -149,12 +162,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="model_generate",
         description=(
-            "Ask an LLM modeler (Kimi K3.1 Pro by default) to write a parametric "
-            "build123d script from a text prompt and/or a reference photo, validate it "
-            "against XPrint's script policy, and store it as a new asset revision. "
-            "WRITES files and calls a paid API: confirm must be exactly "
-            "'MODEL <name> <modeler>'. The script is not executed here; build it with "
-            "the CAD backend or review it first."
+            "Ask an LLM modeler (Kimi K3.1 Pro by default) to design a parametric "
+            "build123d part from a text prompt and/or a reference photo. The modeler "
+            "runs a closed loop: it writes a script, XPrint executes it in a sandbox, "
+            "returns real geometry checks, and the modeler revises until printable. "
+            "The new asset revision stores model.py, STL/STEP artifacts, build checks "
+            "and the full agent_trace.json. WRITES files, executes generated code in a "
+            "limited subprocess and calls a paid API: confirm must be exactly "
+            "'MODEL <name> <modeler>'."
         ),
     )
     def model_generate(
@@ -163,6 +178,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         confirm: str,
         image: str | None = None,
         modeler: str = "kimi",
+        rounds: int = 0,
     ) -> dict[str, Any]:
         try:
             name = validate_name(name)
@@ -171,6 +187,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 raise ConfirmationMismatch(
                     f"confirm must be exactly {expected!r}",
                     details={"expected": expected},
+                )
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise InvalidArgument(
+                    "prompt must not be empty",
+                    hint="Describe the part, its purpose and any dimensions in millimetres.",
                 )
 
             settings = rt.loaded.config.modelers.get(modeler)
@@ -186,6 +207,13 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     hint=f"Set config.modelers.{modeler}.enabled = true.",
                 )
 
+            max_rounds = int(rounds or settings.max_rounds)
+            if not 1 <= max_rounds <= 10:
+                raise InvalidArgument(
+                    "rounds must be between 1 and 10",
+                    hint="Each round is one model completion plus any tool calls.",
+                )
+
             key = rt.secrets.provider_key(modeler, api_key_env=settings.api_key_env)
             adapter = rt.registry.create(
                 "modeler",
@@ -198,34 +226,82 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             if image:
                 image_path = rt.workspace.safe_path(image, must_exist=True)
 
-            generated = adapter.generate(prompt, image=image_path)
-            checks = summarise(check_script(generated.code))
+            cad = rt.loaded.config.cad
+            workdir = rt.workspace.safe_path(
+                f"cache/agents/agent_{secrets.token_hex(6)}", create_parents=True
+            )
+            modeler_loop = ModelingAgent(
+                adapter,
+                workdir,
+                max_rounds=max_rounds,
+                cad_timeout_s=cad.timeout_s,
+                python=cad.python,
+            )
+            result = modeler_loop.run(prompt, image=image_path)
+
+            if result.script is None:
+                raise InvalidArgument(
+                    "The modeler finished without writing a script",
+                    hint="Retry with a more concrete prompt; inspect details.steps.",
+                    details={
+                        "usage": result.usage,
+                        "stopped_reason": result.stopped_reason,
+                        "steps": result.trace[-6:],
+                    },
+                )
+
+            checks = summarise(check_script(result.script))
             if not checks["ok"]:
                 raise InvalidArgument(
                     "The modeler returned a script that failed XPrint's safety checks",
-                    hint=(
-                        "Rephrase the prompt or retry; nothing was stored. "
-                        "See details.issues for the rejected line numbers."
-                    ),
+                    hint="Retry; nothing was stored. See details.issues for line numbers.",
                     details={
-                        "model": generated.model,
-                        "usage": generated.usage,
+                        "model": settings.model,
+                        "usage": result.usage,
                         "issues": checks["errors"],
                     },
                 )
 
+            artifact_files: dict[str, Path] = {}
+            if result.build:
+                for value in result.build.artifacts.values():
+                    path = Path(value)
+                    if path.is_file():
+                        artifact_files[f"model{path.suffix or '.stl'}"] = path
+
             assets = AssetStore(rt.workspace)
             manifest = assets.create(name)
+            build_data = result.build.to_dict() if result.build else None
             record = assets.add_revision(
                 manifest["asset_id"],
-                generated.code,
+                result.script,
                 prompt=prompt.strip(),
-                model=generated.model,
+                model=settings.model,
                 modeler=modeler,
-                usage=generated.usage,
+                usage=result.usage,
                 checks=checks,
+                build=build_data,
+                agent={
+                    "rounds": result.rounds_used,
+                    "finished": result.finished,
+                    "stopped_reason": result.stopped_reason,
+                    "summary": result.summary,
+                    "elapsed_s": round(result.elapsed_s, 2),
+                    "trace": result.trace,
+                },
+                artifacts=artifact_files,
             )
             rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.py")
+
+            built = bool(result.build and result.build.ok)
+            hint = (
+                "Review model.stl in the revision directory, then slice it."
+                if built
+                else (
+                    "The script was stored but did not build cleanly; inspect "
+                    "build.error in params.json, or retry model_generate with more rounds."
+                )
+            )
             return {
                 "ok": True,
                 "writes_performed": True,
@@ -236,14 +312,233 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.py"
                 ),
                 "sha256": record["sha256"],
-                "model": generated.model,
+                "model": settings.model,
                 "modeler": modeler,
-                "usage": generated.usage,
+                "usage": result.usage,
+                "checks": checks,
+                "build": {
+                    "ok": built,
+                    "rounds": result.rounds_used,
+                    "finished": result.finished,
+                    "stopped_reason": result.stopped_reason,
+                    "checks": result.build.checks if result.build else {},
+                    "error": result.build.error if result.build else None,
+                    "timed_out": result.build.timed_out if result.build else False,
+                },
+                "artifacts": sorted(record["artifacts"]),
+                "hint": hint,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="model_write",
+        description=(
+            "Store a build123d script you wrote yourself as a new asset revision, "
+            "without calling any LLM. The script must follow XPrint's contract "
+            "(from build123d import *, a build_part() returning one solid, PARAMS in "
+            "mm, base on z=0) and passes the same static safety checks as generated "
+            "scripts; nothing is executed here. Use asset_id to append a revision to "
+            "an existing asset, or name to create a new one. WRITES files: confirm "
+            "must be exactly 'WRITE <name>' for a new asset or 'WRITE <asset_id>' to "
+            "append. Then call model_build."
+        ),
+    )
+    def model_write(
+        script: str,
+        confirm: str,
+        name: str = "",
+        asset_id: str = "",
+        prompt: str = "",
+    ) -> dict[str, Any]:
+        try:
+            target = asset_id or name
+            expected = f"WRITE {target}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            if not isinstance(script, str) or not script.strip():
+                raise InvalidArgument(
+                    "script must not be empty",
+                    hint="Send the complete Python source of model.py.",
+                )
+
+            assets = AssetStore(rt.workspace)
+            if asset_id:
+                validate_asset_id(asset_id)
+                manifest = assets.load(asset_id)
+            else:
+                name = validate_name(name)
+                manifest = None
+
+            checks = summarise(check_script(script))
+            if not checks["ok"]:
+                raise InvalidArgument(
+                    "The script failed XPrint's safety checks; nothing was stored",
+                    hint="See details.issues for line numbers, then call model_write again.",
+                    details={"issues": checks["errors"]},
+                )
+            if manifest is None:
+                manifest = assets.create(name)
+
+            record = assets.add_revision(
+                manifest["asset_id"],
+                script,
+                prompt=prompt.strip() or "(written by an MCP client)",
+                model="external",
+                modeler="mcp-client",
+                checks=checks,
+            )
+            rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.py")
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "asset_id": manifest["asset_id"],
+                "name": manifest["name"],
+                "revision": record["revision"],
+                "script_path": rt.workspace.rel(
+                    assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.py"
+                ),
+                "sha256": record["sha256"],
                 "checks": checks,
                 "hint": (
-                    "Review the script, then build it with the CAD backend "
-                    "(`cad run model.py`) once text-to-cad is configured."
+                    f"Call model_build with asset_id {manifest['asset_id']!r} and "
+                    f"confirm 'BUILD {manifest['asset_id']}'."
                 ),
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="model_build",
+        description=(
+            "Execute a stored asset revision in XPrint's sandboxed build123d "
+            "interpreter (CPU/time/file limits, no API keys in the environment) and "
+            "attach the result to that revision. Returns real geometry checks "
+            "(watertight, boundary/non-manifold edges, bbox, volume) and stores "
+            "model.stl/model.step. This is the feedback step of the closed loop: read "
+            "the checks, fix the script, call model_write again. WRITES files: confirm "
+            "must be exactly 'BUILD <asset_id>'."
+        ),
+    )
+    def model_build(asset_id: str, confirm: str, revision: str = "") -> dict[str, Any]:
+        try:
+            validate_asset_id(asset_id)
+            expected = f"BUILD {asset_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(asset_id)
+            target = revision or assets.latest_revision(manifest)
+            if not target:
+                raise InvalidArgument(
+                    f"Asset {asset_id} has no revisions",
+                    hint="Call model_write first.",
+                )
+            script_path, script = assets.read_script(asset_id, target)
+            checks = summarise(check_script(script))
+            if not checks["ok"]:
+                raise InvalidArgument(
+                    "The stored script failed safety checks; refusing to execute it",
+                    details={"issues": checks["errors"]},
+                )
+
+            cad = rt.loaded.config.cad
+            workdir = rt.workspace.safe_path(
+                f"cache/builds/{asset_id}_{target}_{secrets.token_hex(4)}",
+                create_parents=True,
+            )
+            result = run_script(
+                script_path,
+                workdir=workdir,
+                timeout_s=cad.timeout_s,
+                python=cad.python,
+            )
+
+            stored: dict[str, Path] = {}
+            for value in result.artifacts.values():
+                path = Path(value)
+                if path.is_file():
+                    stored[f"model{path.suffix or '.stl'}"] = path
+            record = assets.record_build(
+                asset_id,
+                target,
+                build=result.to_dict(),
+                artifacts=stored,
+            )
+            rt.record_write(f"assets/{asset_id}/{target}/model.stl")
+
+            hint = (
+                "Printable so far: review the checks, then slice. If a check failed, "
+                "fix the script and call model_write followed by model_build."
+            )
+            if not result.ok:
+                hint = (
+                    "Build failed; read error/stderr_tail above, fix model.py and "
+                    "call model_write, then model_build again."
+                )
+            return {
+                "ok": result.ok,
+                "writes_performed": True,
+                "asset_id": asset_id,
+                "revision": target,
+                "exit_code": result.exit_code,
+                "duration_s": round(result.duration_s, 2),
+                "timed_out": result.timed_out,
+                "checks": result.checks,
+                "artifacts": sorted(record["artifacts"]),
+                "error": result.error,
+                "stdout_tail": result.stdout[-2000:],
+                "stderr_tail": result.stderr[-2000:],
+                "hint": hint,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="model_show",
+        description=(
+            "Return one asset's manifest and the source of a stored revision "
+            "(latest by default), so a client model can read, explain or repair it. "
+            "Read-only."
+        ),
+    )
+    def model_show(asset_id: str, revision: str = "") -> dict[str, Any]:
+        try:
+            validate_asset_id(asset_id)
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(asset_id)
+            target = revision or assets.latest_revision(manifest)
+            script = ""
+            params: dict[str, Any] = {}
+            if target:
+                _, script = assets.read_script(asset_id, target)
+                params_path = assets.revision_dir(asset_id, target) / "params.json"
+                if params_path.is_file():
+                    params = json.loads(params_path.read_text(encoding="utf-8"))
+            return {
+                "ok": True,
+                "writes_performed": False,
+                "asset_id": asset_id,
+                "name": manifest.get("name"),
+                "revision": target,
+                "revisions": [
+                    {
+                        "revision": item.get("revision"),
+                        "created_at": item.get("created_at"),
+                        "checks": item.get("checks", {}),
+                        "build_ok": (item.get("build") or {}).get("ok"),
+                        "artifacts": sorted(item.get("artifacts", {})),
+                    }
+                    for item in manifest.get("revisions", [])
+                ],
+                "script": script,
+                "params": params,
             }
         except XPrintError as exc:
             return tool_error(exc)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,40}$")
 MANIFEST = "asset.json"
 SCRIPT = "model.py"
 PARAMS = "params.json"
+TRACE = "agent_trace.json"
 
 
 def new_asset_id(now: datetime | None = None) -> str:
@@ -104,6 +106,78 @@ class AssetStore:
         count = len(manifest.get("revisions", []))
         return f"v{count + 1:03d}"
 
+    def latest_revision(self, manifest: dict[str, Any]) -> str | None:
+        revisions = manifest.get("revisions") or []
+        return revisions[-1]["revision"] if revisions else None
+
+    def read_script(self, asset_id: str, revision: str) -> tuple[Path, str]:
+        path = self.revision_dir(asset_id, revision) / SCRIPT
+        if not path.is_file():
+            raise NotFound(
+                f"Revision {revision} of {asset_id} has no script",
+                hint="Use `model_write` to add a revision, or check the revision id.",
+            )
+        return path, path.read_text(encoding="utf-8")
+
+    def record_build(
+        self,
+        asset_id: str,
+        revision: str,
+        *,
+        build: dict[str, Any],
+        artifacts: dict[str, Path] | None = None,
+    ) -> dict[str, Any]:
+        """Attach a build result (and its files) to an existing revision."""
+
+        manifest = self.load(asset_id)
+        directory = self.revision_dir(asset_id, revision)
+        if not directory.is_dir():
+            raise NotFound(
+                f"Unknown revision: {revision}",
+                hint="Revisions are listed in the asset manifest.",
+            )
+
+        stored: dict[str, str] = {}
+        for stored_name, source in (artifacts or {}).items():
+            source_path = Path(source)
+            if not source_path.is_file():
+                continue
+            target = directory / Path(stored_name).name
+            shutil.copyfile(source_path, target)
+            target.chmod(0o644)
+            stored[Path(stored_name).name] = sha256_file(target)
+
+        params_path = directory / PARAMS
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            params = {}
+        params["build"] = build
+        params["artifacts"] = {**params.get("artifacts", {}), **stored}
+        params["built_at"] = _iso()
+        atomic_write_text(
+            params_path,
+            json.dumps(params, indent=2, ensure_ascii=False) + "\n",
+            mode=0o644,
+        )
+
+        record: dict[str, Any] | None = None
+        for item in manifest.get("revisions", []):
+            if item.get("revision") == revision:
+                item["build"] = build
+                item["artifacts"] = {**item.get("artifacts", {}), **stored}
+                item["built_at"] = params["built_at"]
+                record = item
+                break
+        if record is None:
+            raise NotFound(
+                f"Unknown revision: {revision}",
+                hint="Revisions are listed in the asset manifest.",
+            )
+        manifest["updated_at"] = params["built_at"]
+        self._write_manifest(asset_id, manifest)
+        return record
+
     def add_revision(
         self,
         asset_id: str,
@@ -114,8 +188,17 @@ class AssetStore:
         modeler: str,
         usage: dict[str, Any] | None = None,
         checks: dict[str, Any] | None = None,
+        build: dict[str, Any] | None = None,
+        agent: dict[str, Any] | None = None,
+        artifacts: dict[str, Path] | None = None,
     ) -> dict[str, Any]:
-        """Write the script + provenance and return the new revision record."""
+        """Write the script, provenance and build artifacts; return the revision.
+
+        ``artifacts`` maps a stored file name (e.g. ``model.stl``) to a path in a
+        scratch directory; each file is copied in so the revision is
+        self-contained.  ``agent`` carries the tool-call trace of the modeling
+        loop and is written as ``agent_trace.json``.
+        """
 
         manifest = self.load(asset_id)
         revision = self.next_revision(manifest)
@@ -125,6 +208,23 @@ class AssetStore:
         script_path = directory / SCRIPT
         atomic_write_text(script_path, script, mode=0o644)
         digest = sha256_file(script_path)
+
+        stored: dict[str, str] = {}
+        for stored_name, source in (artifacts or {}).items():
+            source_path = Path(source)
+            if not source_path.is_file():
+                continue
+            target = directory / Path(stored_name).name
+            shutil.copyfile(source_path, target)
+            target.chmod(0o644)
+            stored[Path(stored_name).name] = sha256_file(target)
+
+        if agent and agent.get("trace"):
+            atomic_write_text(
+                directory / TRACE,
+                json.dumps(agent, indent=2, ensure_ascii=False) + "\n",
+                mode=0o644,
+            )
 
         params = {
             "asset_id": asset_id,
@@ -136,6 +236,9 @@ class AssetStore:
             "script_sha256": digest,
             "usage": usage or {},
             "checks": checks or {},
+            "build": build or {},
+            "agent": {k: v for k, v in (agent or {}).items() if k != "trace"},
+            "artifacts": stored,
         }
         atomic_write_text(
             directory / PARAMS,
@@ -153,6 +256,8 @@ class AssetStore:
             "prompt": prompt,
             "usage": usage or {},
             "checks": checks or {},
+            "build": build or {},
+            "artifacts": stored,
         }
         manifest.setdefault("revisions", []).append(record)
         manifest["updated_at"] = record["created_at"]

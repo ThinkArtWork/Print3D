@@ -149,6 +149,30 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cad(args: argparse.Namespace) -> int:
+    from .cad import run_script
+
+    _, loaded, _ = _load(args)
+    script = Path(args.script).expanduser()
+    if not script.is_absolute():
+        script = Path.cwd() / script
+    workdir = Path(args.workdir).expanduser() if args.workdir else script.parent
+    timeout = args.timeout or loaded.config.cad.timeout_s
+    result = run_script(
+        script,
+        workdir=workdir,
+        timeout_s=timeout,
+        python=args.python or loaded.config.cad.python,
+    )
+    _print_json(result.to_dict())
+    if not result.ok:
+        print(
+            result.hint or "the model did not build; see checks/stdout above",
+            file=sys.stderr,
+        )
+    return 0 if result.ok else 1
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     _print_json({"ok": True, "name": "xprint", "version": __version__})
     return 0
@@ -204,6 +228,15 @@ def build_parser() -> argparse.ArgumentParser:
     jp = jsub.add_parser("show", help="show one job")
     jp.add_argument("job_id")
     jp.set_defaults(func=cmd_job)
+
+    p = sub.add_parser("cad", parents=[common], help="run CAD scripts locally")
+    csub = p.add_subparsers(dest="cad_command", required=True)
+    cp = csub.add_parser("run", help="execute a build123d model.py in the sandbox")
+    cp.add_argument("script", help="path to model.py")
+    cp.add_argument("--workdir", default=None, help="output directory (default: script's dir)")
+    cp.add_argument("--timeout", type=float, default=None, help="wall-clock seconds")
+    cp.add_argument("--python", default=None, help="CAD interpreter (default: config.cad.python)")
+    cp.set_defaults(func=cmd_cad)
 
     p = sub.add_parser("version", parents=[common], help="print version")
     p.set_defaults(func=cmd_version)
