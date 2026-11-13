@@ -1,0 +1,27 @@
+# secrets / local config
+secrets.json
+*.local.json
+.env
+.env.*
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# runtime workspace (if pointed inside the repo)
+jobs/
+assets/
+cache/
+logs/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
