@@ -173,6 +173,98 @@ def cmd_cad(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_image(args: argparse.Namespace) -> int:
+    from .images import ReferenceStore
+    from .registry import builtin_registry
+
+    ws, loaded, secrets = _load(args)
+    configured = loaded.config.images
+    provider_id = args.provider
+    if not provider_id:
+        provider_id = next(
+            (name for name, item in sorted(configured.items()) if item.enabled), None
+        )
+    if not provider_id or provider_id not in configured:
+        known = ", ".join(sorted(configured)) or "(none)"
+        raise XPrintError(
+            f"Unknown image provider: {provider_id or '(none)'}",
+            hint=f"Configured image providers: {known}",
+        )
+    settings = configured[provider_id]
+    key = secrets.provider_key(provider_id, api_key_env=settings.api_key_env)
+    generator = builtin_registry().create(
+        "image",
+        settings.adapter,
+        settings=settings.model_dump(),
+        api_key=key,
+        provider_id=provider_id,
+    )
+    image = generator.generate(args.prompt, size=args.size or settings.size)
+    store = ReferenceStore(ws)
+    meta = store.create(image, prompt=args.prompt, provider=provider_id, model=settings.model)
+    image_path = store.directory(meta["reference_id"]) / meta["file"]
+    if args.out:
+        out = Path(args.out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(image.data)
+    _print_json(
+        {
+            "ok": True,
+            "reference_id": meta["reference_id"],
+            "image_path": ws.rel(image_path),
+            "provider": provider_id,
+            "model": meta["model"],
+            "size": meta["size"],
+            "bytes": meta["bytes"],
+            "sha256": meta["sha256"],
+        }
+    )
+    return 0
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    from .assets import AssetStore
+    from .preview import DEFAULT_VIEWS, render_views
+
+    ws, _, _ = _load(args)
+    assets = AssetStore(ws)
+    manifest = assets.load(args.asset_id)
+    target = args.revision or assets.latest_revision(manifest)
+    if not target:
+        raise XPrintError(f"Asset {args.asset_id} has no revisions", hint="Call model_write first.")
+    stl = assets.revision_dir(args.asset_id, target) / "model.stl"
+    if not stl.is_file():
+        raise XPrintError(
+            f"Revision {target} has no built model",
+            hint="Call model_build (or `xprint cad run`) first.",
+        )
+    views = tuple(item.strip().lower() for item in (args.views or "").split(",") if item.strip())
+    png = render_views(
+        stl,
+        views=views or DEFAULT_VIEWS,
+        width=args.width,
+        height=args.height,
+        caption=f"{manifest.get('name') or args.asset_id} {target}",
+    )
+    out = (
+        Path(args.out).expanduser()
+        if args.out
+        else ws.root / "cache" / (f"previews/{args.asset_id}_{target}.png")
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png)
+    _print_json(
+        {
+            "ok": True,
+            "asset_id": args.asset_id,
+            "revision": target,
+            "image_path": str(out),
+            "bytes": len(png),
+        }
+    )
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     _print_json({"ok": True, "name": "xprint", "version": __version__})
     return 0
@@ -237,6 +329,23 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--timeout", type=float, default=None, help="wall-clock seconds")
     cp.add_argument("--python", default=None, help="CAD interpreter (default: config.cad.python)")
     cp.set_defaults(func=cmd_cad)
+
+    p = sub.add_parser("image", parents=[common], help="generate a concept image (text -> image)")
+    p.add_argument("prompt", help="what the image should show")
+    p.add_argument("--name", required=True, help="asset-style name, e.g. cable-clip")
+    p.add_argument("--provider", default=None, help="image provider id (default: first enabled)")
+    p.add_argument("--size", default=None, help="e.g. 1024x1024")
+    p.add_argument("--out", default=None, help="copy the PNG to this path")
+    p.set_defaults(func=cmd_image)
+
+    p = sub.add_parser("preview", parents=[common], help="render a built model to PNG")
+    p.add_argument("asset_id")
+    p.add_argument("--revision", default="")
+    p.add_argument("--views", default="", help="comma list: iso,front,top,right")
+    p.add_argument("--width", type=int, default=900)
+    p.add_argument("--height", type=int, default=700)
+    p.add_argument("--out", default=None, help="output PNG (default: cache/previews/)")
+    p.set_defaults(func=cmd_preview)
 
     p = sub.add_parser("version", parents=[common], help="print version")
     p.set_defaults(func=cmd_version)

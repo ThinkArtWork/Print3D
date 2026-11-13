@@ -15,7 +15,7 @@ from .errors import AdapterUnknown, InvalidArgument
 KINDS: tuple[str, ...] = (
     "provider.cloud",
     "provider.local",
-    "modeler",
+    "image",
     "cad",
     "render",
     "slicer",
@@ -91,8 +91,8 @@ class Registry:
 
 def builtin_registry() -> Registry:
     """A registry with every adapter that ships in this build."""
-    from .modelers import kimi_from_config
+    from .images import generator_from_config
 
     registry = Registry()
-    registry.register("modeler", "kimi", kimi_from_config)
+    registry.register("image", "openai", generator_from_config)
     return registry

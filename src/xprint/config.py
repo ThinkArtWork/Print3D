@@ -46,18 +46,22 @@ class ProvidersSettings(BaseModel):
     default: str | None = None
 
 
-class ModelerSettings(BaseModel):
-    """An LLM that writes CAD scripts (e.g. Kimi K3.1 Pro)."""
+class ImageProviderSettings(BaseModel):
+    """An OpenAI-compatible text-to-image endpoint used for concept art.
+
+    The concept image is the visual reference of the ``text -> image -> model``
+    path; any endpoint that speaks ``POST /images/generations`` works.
+    """
 
     model_config = ConfigDict(extra="allow")
 
+    adapter: str = "openai"
     enabled: bool = True
-    base_url: str = "https://api.moonshot.cn/v1"
-    model: str = "kimi-k3.1-pro"
-    reasoning_effort: str | None = "high"
-    timeout_s: float = Field(default=180.0, gt=1, le=900)
-    api_key_env: str = "MOONSHOT_API_KEY"
-    max_rounds: int = Field(default=4, ge=1, le=10)
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-image-1"
+    size: str = "1024x1024"
+    timeout_s: float = Field(default=120.0, gt=1, le=600)
+    api_key_env: str = "OPENAI_API_KEY"
 
 
 class CadSettings(BaseModel):
@@ -105,8 +109,8 @@ class Config(BaseModel):
     server: ServerSettings = Field(default_factory=ServerSettings)
     workspace: str = DEFAULT_WORKSPACE
     providers: ProvidersSettings = Field(default_factory=ProvidersSettings)
-    modelers: dict[str, ModelerSettings] = Field(
-        default_factory=lambda: {"kimi": ModelerSettings()}
+    images: dict[str, ImageProviderSettings] = Field(
+        default_factory=lambda: {"openai": ImageProviderSettings()}
     )
     cad: CadSettings = Field(default_factory=CadSettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
@@ -171,15 +175,15 @@ def default_config_dict(workspace: str = DEFAULT_WORKSPACE) -> dict[str, Any]:
             "local": {},
             "default": None,
         },
-        "modelers": {
-            "kimi": {
+        "images": {
+            "openai": {
+                "adapter": "openai",
                 "enabled": True,
-                "base_url": "https://api.moonshot.cn/v1",
-                "model": "kimi-k3.1-pro",
-                "reasoning_effort": "high",
-                "timeout_s": 180,
-                "api_key_env": "MOONSHOT_API_KEY",
-                "max_rounds": 4,
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-image-1",
+                "size": "1024x1024",
+                "timeout_s": 120,
+                "api_key_env": "OPENAI_API_KEY",
             },
         },
         "cad": {
@@ -389,6 +393,7 @@ def load_all(
 
 __all__ = [
     "Config",
+    "ImageProviderSettings",
     "LoadedConfig",
     "Secrets",
     "default_config_dict",

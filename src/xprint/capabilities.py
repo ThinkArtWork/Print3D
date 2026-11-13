@@ -65,21 +65,21 @@ def probe_providers(cfg: LoadedConfig, secrets: Secrets) -> dict[str, Any]:
     }
 
 
-def probe_modelers(cfg: LoadedConfig, secrets: Secrets) -> list[dict[str, Any]]:
-    """Report LLM modelers (Kimi etc.) without ever exposing key material."""
+def probe_images(cfg: LoadedConfig, secrets: Secrets) -> list[dict[str, Any]]:
+    """Report text-to-image providers (concept art) without exposing keys."""
     entries: list[dict[str, Any]] = []
-    for modeler_id, settings in cfg.config.modelers.items():
-        key = secrets.provider_key(modeler_id, api_key_env=settings.api_key_env)
+    for image_id, settings in sorted(cfg.config.images.items()):
+        key = secrets.provider_key(image_id, api_key_env=settings.api_key_env)
         entries.append(
             {
-                "id": modeler_id,
-                "adapter": modeler_id,
+                "id": image_id,
+                "adapter": image_id,
                 "enabled": settings.enabled,
                 "model": settings.model,
                 "base_url": settings.base_url,
-                "reasoning_effort": settings.reasoning_effort,
+                "size": settings.size,
                 "has_key": key is not None,
-                "key_source": secrets.key_source(modeler_id, api_key_env=settings.api_key_env),
+                "key_source": secrets.key_source(image_id, api_key_env=settings.api_key_env),
                 "ready": bool(settings.enabled and key),
             }
         )
@@ -205,7 +205,7 @@ def build_capabilities(
 ) -> dict[str, Any]:
     """Full capability report.  Read-only: touches no network, writes nothing."""
     providers = probe_providers(loaded, secrets)
-    modelers = probe_modelers(loaded, secrets)
+    images = probe_images(loaded, secrets)
     cad = probe_cad(loaded)
     render = probe_render(loaded)
     slicers = probe_slicers(loaded, registry)
@@ -215,7 +215,7 @@ def build_capabilities(
         "writes_performed": False,
         "version": __version__,
         "providers": providers,
-        "modelers": modelers,
+        "images": images,
         "cad": cad,
         "render": render,
         "slicers": slicers,
@@ -223,7 +223,7 @@ def build_capabilities(
         "adapters": registry.snapshot(),
         "summary": {
             "cloud_providers_usable": len(providers["usable"]),
-            "modelers_ready": sum(1 for item in modelers if item["ready"]),
+            "image_providers_ready": sum(1 for item in images if item["ready"]),
             "local_providers": len(providers["local"]),
             "cad_available": cad["available"],
             "render_available": render["available"],

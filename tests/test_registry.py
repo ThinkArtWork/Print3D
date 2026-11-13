@@ -48,13 +48,13 @@ def test_snapshot_shape() -> None:
     assert set(snap) == {
         "provider.cloud",
         "provider.local",
-        "modeler",
+        "image",
         "cad",
         "render",
         "slicer",
         "printer",
     }
-    assert snap["modeler"] == ["kimi"]
+    assert snap["image"] == ["openai"]
 
 
 def test_unregister() -> None:

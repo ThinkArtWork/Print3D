@@ -191,13 +191,17 @@ class AssetStore:
         build: dict[str, Any] | None = None,
         agent: dict[str, Any] | None = None,
         artifacts: dict[str, Path] | None = None,
+        reference: Path | None = None,
+        reference_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write the script, provenance and build artifacts; return the revision.
 
         ``artifacts`` maps a stored file name (e.g. ``model.stl``) to a path in a
         scratch directory; each file is copied in so the revision is
-        self-contained.  ``agent`` carries the tool-call trace of the modeling
-        loop and is written as ``agent_trace.json``.
+        self-contained.  ``agent`` carries the tool-call trace of the modelling
+        loop and is written as ``agent_trace.json``.  ``reference`` is a concept
+        image (``text -> image -> model`` path): it is copied next to the script
+        as ``reference.<ext>`` and its provenance is kept in ``params.json``.
         """
 
         manifest = self.load(asset_id)
@@ -219,6 +223,23 @@ class AssetStore:
             target.chmod(0o644)
             stored[Path(stored_name).name] = sha256_file(target)
 
+        reference_record: dict[str, Any] | None = None
+        if reference is not None:
+            source_path = Path(reference)
+            if not source_path.is_file():
+                raise NotFound(
+                    f"Reference image not found: {source_path}",
+                    hint="Call image_generate first, then pass the returned image_path.",
+                )
+            target = directory / f"reference{source_path.suffix.lower() or '.png'}"
+            shutil.copyfile(source_path, target)
+            target.chmod(0o644)
+            reference_record = {
+                "file": target.name,
+                "sha256": sha256_file(target),
+                "meta": reference_meta or {},
+            }
+
         if agent and agent.get("trace"):
             atomic_write_text(
                 directory / TRACE,
@@ -239,6 +260,7 @@ class AssetStore:
             "build": build or {},
             "agent": {k: v for k, v in (agent or {}).items() if k != "trace"},
             "artifacts": stored,
+            "reference": reference_record or {},
         }
         atomic_write_text(
             directory / PARAMS,
@@ -258,6 +280,7 @@ class AssetStore:
             "checks": checks or {},
             "build": build or {},
             "artifacts": stored,
+            "reference": reference_record or {},
         }
         manifest.setdefault("revisions", []).append(record)
         manifest["updated_at"] = record["created_at"]

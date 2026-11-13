@@ -16,10 +16,11 @@ def test_capabilities_shape(workspace) -> None:
     assert {p["id"] for p in payload["providers"]["cloud"]} == {"hunyuan", "tripo"}
     assert payload["providers"]["usable"] == []
     assert "cad" in payload and "render" in payload
-    kimi = next(item for item in payload["modelers"] if item["id"] == "kimi")
-    assert kimi["model"] == "kimi-k3.1-pro"
-    assert kimi["has_key"] is False
-    assert kimi["ready"] is False
+    openai = next(item for item in payload["images"] if item["id"] == "openai")
+    assert openai["model"] == "gpt-image-1"
+    assert openai["has_key"] is False
+    assert openai["ready"] is False
+    assert payload["summary"]["image_providers_ready"] == 0
     assert isinstance(payload["warnings"], list)
     json.dumps(payload)
 
@@ -53,7 +54,7 @@ def test_system_status(workspace) -> None:
     assert set(payload["adapters"]) == {
         "provider.cloud",
         "provider.local",
-        "modeler",
+        "image",
         "cad",
         "render",
         "slicer",

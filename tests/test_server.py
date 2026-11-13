@@ -34,13 +34,16 @@ def test_handshake_and_tools_list() -> None:
     assert info.serverInfo.name == "xprint"
     assert info.serverInfo.version == __version__
     assert sorted(t.name for t in listing.tools) == [
+        "asset_export",
         "asset_list",
         "capabilities",
+        "image_generate",
         "job_status",
         "model_build",
-        "model_generate",
+        "model_preview",
         "model_show",
         "model_write",
+        "reference_import",
         "system_status",
     ]
     assert all(t.inputSchema["type"] == "object" for t in listing.tools)

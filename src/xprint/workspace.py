@@ -18,17 +18,22 @@ from .errors import InvalidArgument, NotFound, PathOutsideWorkspace
 DEFAULT_WORKSPACE = "~/.xprint"
 
 #: Directories created inside a workspace on first use.
-SUBDIRS = ("assets", "jobs", "profiles", "cache", "logs")
+SUBDIRS = ("assets", "references", "jobs", "profiles", "cache", "logs")
 
 
 def atomic_write_text(path: Path, text: str, *, mode: int = 0o600) -> None:
     """Write ``text`` to ``path`` atomically, creating parents as needed."""
+    atomic_write_bytes(path, text.encode("utf-8"), mode=mode)
+
+
+def atomic_write_bytes(path: Path, data: bytes, *, mode: int = 0o600) -> None:
+    """Write ``data`` to ``path`` atomically, creating parents as needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp_name, mode)
@@ -70,6 +75,10 @@ class Workspace:
     @property
     def assets_dir(self) -> Path:
         return self.root / "assets"
+
+    @property
+    def references_dir(self) -> Path:
+        return self.root / "references"
 
     @property
     def logs_dir(self) -> Path:

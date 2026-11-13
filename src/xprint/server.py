@@ -7,34 +7,39 @@ without speaking MCP.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import secrets
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from . import __version__
-from .agent import ModelingAgent
 from .assets import AssetStore, validate_asset_id, validate_name
 from .cad import run_script
 from .capabilities import build_capabilities, build_system_status
-from .config import LoadedConfig, Secrets, load_all
+from .config import ImageProviderSettings, LoadedConfig, Secrets, load_all
 from .errors import (
     AdapterUnavailable,
     ConfigError,
     ConfirmationMismatch,
     InvalidArgument,
+    NotFound,
     XPrintError,
     error_payload,
 )
-from .jobs import Job, JobStore
+from .images import MAX_IMAGE_BYTES, GeneratedImage, ReferenceStore, sniff_image_mime
+from .jobs import Job, JobStore, sha256_file
+from .preview import DEFAULT_VIEWS, render_views
 from .registry import Registry, builtin_registry
 from .script_policy import check_script, summarise
-from .workspace import Workspace
+from .workspace import Workspace, atomic_write_bytes
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -43,25 +48,35 @@ XPrint is a self-hosted bridge between MCP agents and the 3D-printing tools on
 this machine.
 
 Safety contract:
-- Read-only tools (capabilities, system_status, job_status) run without
-  confirmation.
-- Every tool that writes files or talks to paid services requires the exact
+- Read-only tools (capabilities, system_status, job_status, model_show,
+  asset_list) run without confirmation.
+- Every tool that writes files or talks to a paid service requires the exact
   `confirm` string documented in its schema.  A wrong string is rejected with
   code `confirmation_mismatch`, nothing is written.
 - XPrint never sends arbitrary G-code to a printer; slicing output is inspected
   and confirmed first.
 
-Start with `capabilities` to learn which providers, CAD backends, slicers and
-printers are available on this host.
+Start with `capabilities` to learn which providers, CAD backends, image
+providers, slicers and printers are available on this host.
 
-Two modelling paths, both versioned as assets:
+Two modelling paths, both stored as versioned assets:
 
-1. Bring your own model (no LLM inside XPrint): you write a build123d script,
-   call `model_write` to store it, `model_build` to execute it and read the real
-   geometry checks, then revise with another `model_write`/`model_build` pair
-   until the part is watertight.  `model_show` returns the stored script.
-2. Let XPrint drive a modeler: `model_generate` runs a closed loop with the
-   configured modeler (Kimi by default), which needs an API key.
+1. Text -> concept image -> model:
+   `image_generate` turns the idea into a concept image and stores it as a
+   reference.  Write a build123d script informed by that image, call
+   `model_write` with `reference=<image_path>`, then `model_build` to execute it
+   in a sandbox and read real geometry checks.  `model_preview` renders the
+   built STL back to you as an image (next to the concept image), so you can
+   compare intent with the result and revise.
+
+2. Text -> model (no image step):
+   write the script directly, call `model_write`, `model_build`, then
+   `model_preview` to look at the result.  Repeat until the part is watertight
+   and matches the request.
+
+`model_show` returns a stored revision's script and provenance.  Built artifacts
+(model.stl, model.step) live in the workspace; previews are returned inline as
+PNG content.
 """
 
 
@@ -119,6 +134,71 @@ def job_payload(job: Job) -> dict[str, Any]:
     return data
 
 
+def _image_result(
+    payload: dict[str, Any], images: list[tuple[bytes, str, str | None]]
+) -> CallToolResult:
+    """Return structured JSON and image blocks in a single tool result."""
+
+    content: list[Any] = [
+        TextContent(type="text", text=json.dumps(payload, indent=2, ensure_ascii=False))
+    ]
+    for data, mime, label in images:
+        if label:
+            content.append(TextContent(type="text", text=label))
+        content.append(
+            ImageContent(
+                type="image",
+                data=base64.b64encode(data).decode("ascii"),
+                mimeType=mime,
+            )
+        )
+    return CallToolResult(content=content, structuredContent=payload)
+
+
+def _image_settings(rt: Runtime, provider: str) -> tuple[str, ImageProviderSettings]:
+    configured = rt.loaded.config.images
+    if provider:
+        settings = configured.get(provider)
+        if settings is None:
+            known = ", ".join(sorted(configured)) or "(none)"
+            raise InvalidArgument(
+                f"Unknown image provider: {provider}",
+                hint=f"Configured image providers: {known}",
+            )
+        provider_id = provider
+    else:
+        enabled = [(name, item) for name, item in sorted(configured.items()) if item.enabled]
+        if not enabled:
+            raise AdapterUnavailable(
+                "No image provider is enabled",
+                hint="Enable one under images.<id> in config.json, or add a key.",
+            )
+        provider_id, settings = enabled[0]
+    if not settings.enabled:
+        raise AdapterUnavailable(
+            f"Image provider {provider_id!r} is disabled in config",
+            hint=f"Set config.images.{provider_id}.enabled = true.",
+        )
+    return provider_id, settings
+
+
+def _reference_meta(rt: Runtime, path: Path) -> dict[str, Any]:
+    """Read the meta.json of a stored reference, when the path is one."""
+    meta_path = path.parent / "meta.json"
+    try:
+        path.relative_to(rt.workspace.references_dir)
+    except ValueError:
+        return {"source_path": rt.workspace.rel(path)}
+    if meta_path.is_file():
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            return data
+    return {"source_path": rt.workspace.rel(path)}
+
+
 def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> FastMCP:
     """Create the FastMCP application with every M0 tool registered."""
 
@@ -160,29 +240,103 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         return build_system_status(rt.loaded, rt.secrets, rt.workspace, rt.store, rt.registry)
 
     @server.tool(
-        name="model_generate",
+        name="reference_import",
         description=(
-            "Ask an LLM modeler (Kimi K3.1 Pro by default) to design a parametric "
-            "build123d part from a text prompt and/or a reference photo. The modeler "
-            "runs a closed loop: it writes a script, XPrint executes it in a sandbox, "
-            "returns real geometry checks, and the modeler revises until printable. "
-            "The new asset revision stores model.py, STL/STEP artifacts, build checks "
-            "and the full agent_trace.json. WRITES files, executes generated code in a "
-            "limited subprocess and calls a paid API: confirm must be exactly "
-            "'MODEL <name> <modeler>'."
+            "Import an image the user already has (a sketch, a photo, a screenshot) "
+            "into the workspace as a concept reference, so it can be attached to a "
+            "model revision with model_write(reference=...). This is the image-input "
+            "half of the text/image -> model path: the client model looks at the "
+            "image and writes the script; XPrint keeps the image as provenance. "
+            "WRITES files: confirm must be exactly 'IMPORT <name>'."
         ),
     )
-    def model_generate(
+    def reference_import(path: str, name: str, confirm: str) -> dict[str, Any]:
+        try:
+            name = validate_name(name)
+            expected = f"IMPORT {name}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            source = Path(path).expanduser()
+            if not source.is_absolute():
+                source = Path.cwd() / source
+            if not source.is_file():
+                raise NotFound(
+                    f"Image not found: {source}",
+                    hint="Pass an absolute path, or a path relative to the server's cwd.",
+                )
+            data = source.read_bytes()
+            if not data:
+                raise InvalidArgument("The image file is empty")
+            if len(data) > MAX_IMAGE_BYTES:
+                raise InvalidArgument(
+                    f"The image is too large ({len(data)} bytes, limit {MAX_IMAGE_BYTES})",
+                    hint="Resize it first.",
+                )
+            mime = sniff_image_mime(data[:32])
+            if mime is None:
+                raise InvalidArgument(
+                    "The file is not a PNG, JPEG or WebP image",
+                    details={"path": str(source)},
+                )
+
+            image = GeneratedImage(
+                data=data,
+                provider="local",
+                model="upload",
+                size="",
+                prompt=f"imported from {source.name}",
+            )
+            store = ReferenceStore(rt.workspace)
+            meta = store.create(
+                image,
+                prompt=f"imported from {source.name}",
+                provider="local",
+                model="upload",
+            )
+            relative = rt.workspace.rel(store.directory(meta["reference_id"]) / meta["file"])
+            rt.record_write(relative)
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "reference_id": meta["reference_id"],
+                "image_path": relative,
+                "name": name,
+                "source_path": str(source),
+                "mime": mime,
+                "bytes": meta["bytes"],
+                "sha256": meta["sha256"],
+                "hint": (
+                    f"Now call model_write with reference={relative!r} and confirm='WRITE {name}'."
+                ),
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="image_generate",
+        description=(
+            "Generate a concept image from a text prompt and store it as a reference "
+            "in the workspace (references/<id>/). This is step one of the "
+            "text -> image -> model path: pass the returned image_path to model_write "
+            "as `reference`, then build and preview the model. Any OpenAI-compatible "
+            "images endpoint works (config.images.<id>). WRITES files and calls a paid "
+            "service: confirm must be exactly 'IMAGE <name>'. The image is also "
+            "returned inline so you can see it."
+        ),
+    )
+    def image_generate(
         prompt: str,
         name: str,
         confirm: str,
-        image: str | None = None,
-        modeler: str = "kimi",
-        rounds: int = 0,
-    ) -> dict[str, Any]:
+        provider: str = "",
+        size: str = "",
+    ) -> Any:
         try:
             name = validate_name(name)
-            expected = f"MODEL {name} {modeler}"
+            expected = f"IMAGE {name}"
             if confirm != expected:
                 raise ConfirmationMismatch(
                     f"confirm must be exactly {expected!r}",
@@ -191,157 +345,76 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             if not isinstance(prompt, str) or not prompt.strip():
                 raise InvalidArgument(
                     "prompt must not be empty",
-                    hint="Describe the part, its purpose and any dimensions in millimetres.",
+                    hint="Describe the product, style, material and the key features.",
                 )
 
-            settings = rt.loaded.config.modelers.get(modeler)
-            if settings is None:
-                known = ", ".join(sorted(rt.loaded.config.modelers)) or "(none)"
-                raise InvalidArgument(
-                    f"Unknown modeler: {modeler}",
-                    hint=f"Configured modelers: {known}",
-                )
-            if not settings.enabled:
+            provider_id, settings = _image_settings(rt, provider)
+            key = rt.secrets.provider_key(provider_id, api_key_env=settings.api_key_env)
+            if not key:
                 raise AdapterUnavailable(
-                    f"Modeler {modeler!r} is disabled in config",
-                    hint=f"Set config.modelers.{modeler}.enabled = true.",
+                    f"No API key for image provider {provider_id!r}",
+                    hint=(
+                        f"Set {settings.api_key_env} (or images.{provider_id}.api_key_env), "
+                        "or put the key in secrets.json under providers."
+                    ),
+                    details={"provider": provider_id, "env": settings.api_key_env},
                 )
 
-            max_rounds = int(rounds or settings.max_rounds)
-            if not 1 <= max_rounds <= 10:
-                raise InvalidArgument(
-                    "rounds must be between 1 and 10",
-                    hint="Each round is one model completion plus any tool calls.",
-                )
-
-            key = rt.secrets.provider_key(modeler, api_key_env=settings.api_key_env)
-            adapter = rt.registry.create(
-                "modeler",
-                modeler,
+            adapter = settings.adapter or provider_id
+            generator = rt.registry.create(
+                "image",
+                adapter,
                 settings=settings.model_dump(),
                 api_key=key,
+                provider_id=provider_id,
             )
+            image = generator.generate(prompt, size=size or settings.size)
 
-            image_path = None
-            if image:
-                image_path = rt.workspace.safe_path(image, must_exist=True)
-
-            cad = rt.loaded.config.cad
-            workdir = rt.workspace.safe_path(
-                f"cache/agents/agent_{secrets.token_hex(6)}", create_parents=True
-            )
-            modeler_loop = ModelingAgent(
-                adapter,
-                workdir,
-                max_rounds=max_rounds,
-                cad_timeout_s=cad.timeout_s,
-                python=cad.python,
-            )
-            result = modeler_loop.run(prompt, image=image_path)
-
-            if result.script is None:
-                raise InvalidArgument(
-                    "The modeler finished without writing a script",
-                    hint="Retry with a more concrete prompt; inspect details.steps.",
-                    details={
-                        "usage": result.usage,
-                        "stopped_reason": result.stopped_reason,
-                        "steps": result.trace[-6:],
-                    },
-                )
-
-            checks = summarise(check_script(result.script))
-            if not checks["ok"]:
-                raise InvalidArgument(
-                    "The modeler returned a script that failed XPrint's safety checks",
-                    hint="Retry; nothing was stored. See details.issues for line numbers.",
-                    details={
-                        "model": settings.model,
-                        "usage": result.usage,
-                        "issues": checks["errors"],
-                    },
-                )
-
-            artifact_files: dict[str, Path] = {}
-            if result.build:
-                for value in result.build.artifacts.values():
-                    path = Path(value)
-                    if path.is_file():
-                        artifact_files[f"model{path.suffix or '.stl'}"] = path
-
-            assets = AssetStore(rt.workspace)
-            manifest = assets.create(name)
-            build_data = result.build.to_dict() if result.build else None
-            record = assets.add_revision(
-                manifest["asset_id"],
-                result.script,
+            store = ReferenceStore(rt.workspace)
+            meta = store.create(
+                image,
                 prompt=prompt.strip(),
+                provider=provider_id,
                 model=settings.model,
-                modeler=modeler,
-                usage=result.usage,
-                checks=checks,
-                build=build_data,
-                agent={
-                    "rounds": result.rounds_used,
-                    "finished": result.finished,
-                    "stopped_reason": result.stopped_reason,
-                    "summary": result.summary,
-                    "elapsed_s": round(result.elapsed_s, 2),
-                    "trace": result.trace,
-                },
-                artifacts=artifact_files,
             )
-            rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.py")
+            image_path = store.directory(meta["reference_id"]) / meta["file"]
+            relative = rt.workspace.rel(image_path)
+            rt.record_write(relative)
 
-            built = bool(result.build and result.build.ok)
-            hint = (
-                "Review model.stl in the revision directory, then slice it."
-                if built
-                else (
-                    "The script was stored but did not build cleanly; inspect "
-                    "build.error in params.json, or retry model_generate with more rounds."
-                )
-            )
-            return {
+            payload = {
                 "ok": True,
                 "writes_performed": True,
-                "asset_id": manifest["asset_id"],
+                "reference_id": meta["reference_id"],
+                "image_path": relative,
                 "name": name,
-                "revision": record["revision"],
-                "script_path": rt.workspace.rel(
-                    assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.py"
+                "provider": provider_id,
+                "model": meta["model"],
+                "size": meta["size"],
+                "bytes": meta["bytes"],
+                "sha256": meta["sha256"],
+                "elapsed_s": meta["elapsed_s"],
+                "prompt": meta["prompt"],
+                "hint": (
+                    f"Now write the build123d script and call model_write with "
+                    f"reference={relative!r} and confirm='WRITE {name}'."
                 ),
-                "sha256": record["sha256"],
-                "model": settings.model,
-                "modeler": modeler,
-                "usage": result.usage,
-                "checks": checks,
-                "build": {
-                    "ok": built,
-                    "rounds": result.rounds_used,
-                    "finished": result.finished,
-                    "stopped_reason": result.stopped_reason,
-                    "checks": result.build.checks if result.build else {},
-                    "error": result.build.error if result.build else None,
-                    "timed_out": result.build.timed_out if result.build else False,
-                },
-                "artifacts": sorted(record["artifacts"]),
-                "hint": hint,
             }
+            return _image_result(payload, [(image.data, image.mime, None)])
         except XPrintError as exc:
             return tool_error(exc)
 
     @server.tool(
         name="model_write",
         description=(
-            "Store a build123d script you wrote yourself as a new asset revision, "
-            "without calling any LLM. The script must follow XPrint's contract "
-            "(from build123d import *, a build_part() returning one solid, PARAMS in "
-            "mm, base on z=0) and passes the same static safety checks as generated "
-            "scripts; nothing is executed here. Use asset_id to append a revision to "
-            "an existing asset, or name to create a new one. WRITES files: confirm "
-            "must be exactly 'WRITE <name>' for a new asset or 'WRITE <asset_id>' to "
-            "append. Then call model_build."
+            "Store a build123d script as a new asset revision, without calling any "
+            "LLM. The script must follow XPrint's contract (from build123d import *, "
+            "a build_part() returning one solid, PARAMS in mm, base on z=0) and passes "
+            "the static safety checks; nothing is executed here. Use asset_id to "
+            "append to an existing asset, or name to create one. Optional `reference` "
+            "attaches a concept image (the image_path returned by image_generate) to "
+            "this revision so the model has a visual record of the request. WRITES "
+            "files: confirm must be exactly 'WRITE <name>' for a new asset or "
+            "'WRITE <asset_id>' to append. Then call model_build."
         ),
     )
     def model_write(
@@ -350,6 +423,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         name: str = "",
         asset_id: str = "",
         prompt: str = "",
+        reference: str = "",
     ) -> dict[str, Any]:
         try:
             target = asset_id or name
@@ -380,6 +454,28 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     hint="See details.issues for line numbers, then call model_write again.",
                     details={"issues": checks["errors"]},
                 )
+
+            reference_path: Path | None = None
+            reference_meta: dict[str, Any] = {}
+            if reference:
+                reference_path = rt.workspace.safe_path(reference, must_exist=True)
+                if reference_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    raise InvalidArgument(
+                        "reference must be a PNG, JPEG or WebP image",
+                        hint="Use the image_path returned by image_generate.",
+                        details={"path": reference},
+                    )
+                head = reference_path.read_bytes()[:32]
+                if sniff_image_mime(head) is None:
+                    raise InvalidArgument(
+                        "reference is not a valid image file",
+                        hint="Use the image_path returned by image_generate.",
+                        details={"path": reference},
+                    )
+                reference_meta = _reference_meta(rt, reference_path)
+                if not prompt.strip():
+                    prompt = str(reference_meta.get("prompt") or "")
+
             if manifest is None:
                 manifest = assets.create(name)
 
@@ -390,6 +486,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 model="external",
                 modeler="mcp-client",
                 checks=checks,
+                reference=reference_path,
+                reference_meta=reference_meta,
             )
             rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.py")
             return {
@@ -403,6 +501,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 ),
                 "sha256": record["sha256"],
                 "checks": checks,
+                "reference": record["reference"],
                 "hint": (
                     f"Call model_build with asset_id {manifest['asset_id']!r} and "
                     f"confirm 'BUILD {manifest['asset_id']}'."
@@ -501,6 +600,207 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             return tool_error(exc)
 
     @server.tool(
+        name="model_preview",
+        description=(
+            "Render a built revision's model.stl to a PNG with labelled orthographic "
+            "views (iso/front/top/right by default) and return it inline, together "
+            "with the concept reference when the revision has one. Use this after "
+            "model_build to see the real geometry and compare it with the request; "
+            "then fix the script and call model_write/model_build again. Read-only "
+            "for assets: the PNG is cached under cache/previews/ and nothing in the "
+            "revision changes."
+        ),
+    )
+    def model_preview(
+        asset_id: str,
+        revision: str = "",
+        views: str = "",
+        width: int = 900,
+        height: int = 700,
+    ) -> Any:
+        try:
+            validate_asset_id(asset_id)
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(asset_id)
+            target = revision or assets.latest_revision(manifest)
+            if not target:
+                raise InvalidArgument(
+                    f"Asset {asset_id} has no revisions",
+                    hint="Call model_write first.",
+                )
+            directory = assets.revision_dir(asset_id, target)
+            stl = directory / "model.stl"
+            if not stl.is_file():
+                raise InvalidArgument(
+                    f"Revision {target} has no built model yet",
+                    hint=(
+                        f"Call model_build with asset_id {asset_id!r} and "
+                        f"confirm 'BUILD {asset_id}' first."
+                    ),
+                )
+            if not 320 <= int(width) <= 1600:
+                raise InvalidArgument("width must be between 320 and 1600 pixels")
+            if not 240 <= int(height) <= 1200:
+                raise InvalidArgument("height must be between 240 and 1200 pixels")
+
+            wanted = (
+                tuple(item.strip().lower() for item in (views or "").split(",") if item.strip())
+                or DEFAULT_VIEWS
+            )
+            digest = sha256_file(stl)[:8]
+            cache = rt.workspace.safe_path(
+                f"cache/previews/{asset_id}_{target}_{digest}_{int(width)}x{int(height)}.png",
+                create_parents=True,
+            )
+            cached = cache.is_file()
+            if cached:
+                png = cache.read_bytes()
+            else:
+                caption = f"{manifest.get('name') or asset_id} {target}"
+                try:
+                    png = render_views(
+                        stl,
+                        views=wanted,
+                        width=int(width),
+                        height=int(height),
+                        caption=caption,
+                    )
+                except ValueError as exc:
+                    raise InvalidArgument(
+                        f"Cannot render the model: {exc}",
+                        hint="Check the views names or rebuild the model.",
+                        details={"views": list(wanted)},
+                    ) from None
+                atomic_write_bytes(cache, png, mode=0o644)
+
+            images: list[tuple[bytes, str, str | None]] = []
+            reference_file = ""
+            params_path = directory / "params.json"
+            if params_path.is_file():
+                try:
+                    params = json.loads(params_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    params = {}
+                reference_file = str((params.get("reference") or {}).get("file") or "")
+            if not reference_file:
+                candidates = sorted(directory.glob("reference.*"))
+                reference_file = candidates[0].name if candidates else ""
+            if reference_file and (directory / reference_file).is_file():
+                ref_path = directory / reference_file
+                ref_mime = sniff_image_mime(ref_path.read_bytes()[:32]) or "image/png"
+                images.append(
+                    (ref_path.read_bytes(), ref_mime, "Concept reference (what was asked for):")
+                )
+
+            images.append(
+                (
+                    png,
+                    "image/png",
+                    f"Rendered model, revision {target} (views: {', '.join(wanted)}):",
+                )
+            )
+            payload = {
+                "ok": True,
+                "writes_performed": False,
+                "asset_id": asset_id,
+                "revision": target,
+                "image_path": rt.workspace.rel(cache),
+                "cached": cached,
+                "views": list(wanted),
+                "width": int(width),
+                "height": int(height),
+                "bytes": len(png),
+                "reference": rt.workspace.rel(directory / reference_file)
+                if reference_file
+                else None,
+                "hint": (
+                    "Compare the render with the request and the concept reference. "
+                    "If proportions or features are wrong, edit model.py and call "
+                    "model_write (new revision) then model_build again."
+                ),
+            }
+            return _image_result(payload, images)
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="asset_export",
+        description=(
+            "Copy a built artifact out of the workspace to a path the user can open "
+            "(for example ~/Desktop/bracket.stl). artifact is 'stl', 'step' or "
+            "'script'. Defaults to the workspace exports/ directory. WRITES the "
+            "destination file: confirm must be exactly 'EXPORT <asset_id>'."
+        ),
+    )
+    def asset_export(
+        asset_id: str,
+        confirm: str,
+        revision: str = "",
+        artifact: str = "stl",
+        out_path: str = "",
+    ) -> dict[str, Any]:
+        try:
+            validate_asset_id(asset_id)
+            expected = f"EXPORT {asset_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(asset_id)
+            target = revision or assets.latest_revision(manifest)
+            if not target:
+                raise InvalidArgument(f"Asset {asset_id} has no revisions")
+            record = next(
+                (item for item in manifest.get("revisions", []) if item.get("revision") == target),
+                {},
+            )
+            directory = assets.revision_dir(asset_id, target)
+            name = str(manifest.get("name") or asset_id)
+
+            if artifact == "script":
+                source = directory / "model.py"
+                suffix = ".py"
+            elif artifact in {"stl", "step"}:
+                stored = f"model.{artifact}"
+                if stored not in (record.get("artifacts") or {}):
+                    raise NotFound(
+                        f"Revision {target} has no {artifact} artifact",
+                        hint=f"Call model_build with asset_id {asset_id!r} first.",
+                    )
+                source = directory / stored
+                suffix = f".{artifact}"
+            else:
+                raise InvalidArgument(
+                    "artifact must be 'stl', 'step' or 'script'",
+                    details={"artifact": artifact},
+                )
+            if not source.is_file():
+                raise NotFound(f"Artifact missing on disk: {source}")
+
+            if out_path:
+                destination = Path(out_path).expanduser()
+            else:
+                destination = rt.workspace.root / "exports" / f"{name}-{target}{suffix}"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            destination.chmod(0o644)
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "asset_id": asset_id,
+                "revision": target,
+                "artifact": artifact,
+                "path": str(destination),
+                "bytes": destination.stat().st_size,
+                "sha256": sha256_file(destination),
+                "hint": "Open the file in a slicer, or import it into the printer's web UI.",
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
         name="model_show",
         description=(
             "Return one asset's manifest and the source of a stored revision "
@@ -534,11 +834,13 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "checks": item.get("checks", {}),
                         "build_ok": (item.get("build") or {}).get("ok"),
                         "artifacts": sorted(item.get("artifacts", {})),
+                        "reference": (item.get("reference") or {}).get("file"),
                     }
                     for item in manifest.get("revisions", [])
                 ],
                 "script": script,
                 "params": params,
+                "reference": (params.get("reference") or {}).get("file"),
             }
         except XPrintError as exc:
             return tool_error(exc)
