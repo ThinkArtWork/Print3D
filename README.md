@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **25 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
+> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **27 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
 
 ## 文档
 
@@ -343,6 +343,20 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
 - 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`；PrusaLink 与声明式 `http` 由单元测试覆盖（Digest 重试、上传头、启动/取消路径、状态映射），尚无对应真机。
 
+## 打印前检查与摆放建议
+
+两个只读工具，不需要 `confirm`，也不修改资产；用来在切片前回答“这个件好不好打、该怎么摆”：
+
+- `printability_check(asset_id, target="", revision="")`：包围盒 / 体积、>45° 悬垂面积与占比、支撑体积估计、热床接触面积、薄壁估计（射线法，5% 分位最小值与 <1.2 mm 面积占比）、是否超出目标热床，给出 0–100 分和可执行的 issue/hint。
+- `orientation_plan(asset_id, target="", revision="", limit=5)`：枚举 24 个轴向摆放（6 个朝下轴 × 4 个平面旋转），按悬垂、支撑估计、高度、热床接触计算代价并排序，返回推荐摆放的 3×3 旋转矩阵、`down_axis`、`spin_deg` 和每个候选的指标；当前摆放也会给出分数，便于比较。
+
+```text
+printability_check(asset_id="a_2026...", target="u1")
+orientation_plan(asset_id="a_2026...", target="u1", limit=3)
+```
+
+评分是几何启发式，不是 FEM，也不替代真实切片：薄壁由射线采样估计，支撑体积按“悬垂面积 × 高度 × 0.25”估算；最终支撑量仍以切片器为准。典型用法是 `model_build` → `printability_check` → 有问题就 `orientation_plan` → 改脚本/重摆 → `slice_plan`。
+
 ## 工具
 
 | 工具 | 写操作 | 说明 |
@@ -361,6 +375,8 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 | `model_build` | 是 | 沙箱执行某版本，返回 geometry checks，存 STL/STEP 并自动生成 `viewer.html`；`confirm` 精确为 `BUILD <asset_id>` |
 | `model_preview` | 否* | 四视图 PNG（含概念图对比）内联返回；只写 `cache/previews/`，不改资产 |
 | `model_view` | 是 | 把资产的全部已构建版本合并成一个交互式 3D 查看器（下拉切换版本，WebGL 旋转/缩放/平移/自旋/截图）；`confirm` 精确为 `VIEW <asset_id>` |
+| `printability_check` | 否 | 只读几何可打印性报告：悬垂、支撑估计、薄壁、热床接触/尺寸、0–100 分与 issues |
+| `orientation_plan` | 否 | 只读摆放排序：24 个轴向旋转的悬垂/支撑/高度/接触代价，返回推荐旋转与候选指标 |
 | `asset_export` | 是 | 把 STL/STEP/脚本复制到用户可打开的位置；`confirm` 精确为 `EXPORT <asset_id>` |
 | `slice_capabilities` | 否 | 列出 targets、slicer 版本、预设是否解析、bed |
 | `slice_plan` | 否 | 切片 dry-run：presets、命令、checks、确认串；不写文件 |
@@ -377,7 +393,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 
 ## 安全边界
 
-1. **只读工具免费**：`capabilities`、`system_status`、`job_status`、`asset_list`、`model_show` 不需要确认，且明确返回 `writes_performed: false`；`model_preview` 只写预览缓存。
+1. **只读工具免费**：`capabilities`、`system_status`、`job_status`、`asset_list`、`model_show`、`printability_check`、`orientation_plan` 不需要确认，且明确返回 `writes_performed: false`；`model_preview` 只写预览缓存。
 2. **写操作必须精确确认**：确认串逐字符比较，错了返回 `confirmation_mismatch` 且不写任何文件。
 3. **路径沙箱**：除 `reference_import`（只读用户给的图片路径）和 `asset_export`（只写用户指定的目标）外，所有路径经 `safe_path()` 解析符号链接后校验，逃出工作区一律 `path_outside_workspace`。
 4. **脚本策略 + 执行沙箱**：build123d 脚本先过 AST 审查（禁 `os/pathlib/subprocess/socket/shutil/ctypes/requests/urllib/http/multiprocessing`、禁 `eval/exec/open`…），再在 `cad_worker.py` 子进程里执行：RLIMIT_CPU/FSIZE/NOFILE、独立进程组、超时 SIGKILL、环境变量剔除密钥。bpy 脚本同样先过静态审查（同样禁网络/进程/文件模块，必须使用 `bpy`），再由 `blender -b --factory-startup` 子进程执行，使用独立的 Blender 配置目录、超时杀进程组。`generate_local` 运行的是用户自己配置的命令，环境变量剔除密钥并带超时；这是「用户信任本机命令」的显式边界。静态审查是纵深防御，不是沙箱；真正的隔离边界是子进程 + 资源限额。
@@ -393,7 +409,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 .venv/bin/python -m ruff format src tests
 ```
 
-测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、交互式查看器（几何内嵌、标题转义、面数上限）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`model_view`/`asset_export`/`reference_import`/`blender_run`/`generate_local`/`generate_cloud`、MCP stdio 握手与 HTTP Bearer 鉴权、打印机适配器（respx 模拟 Moonraker/OctoPrint：状态映射、上传、启动、取消、401、不可达）与 `printer_*`/`send` 工具（忙碌拒绝、型号不匹配、确认串、异步上传启动）。
+测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、交互式查看器（几何内嵌、标题转义、面数上限）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`model_view`/`asset_export`/`reference_import`/`blender_run`/`generate_local`/`generate_cloud`、打印前检查（薄壁/悬垂/支撑估计/热床/24 向摆放排序）、MCP stdio 握手与 HTTP Bearer 鉴权、打印机适配器（respx 模拟 Moonraker/OctoPrint：状态映射、上传、启动、取消、401、不可达）与 `printer_*`/`send` 工具（忙碌拒绝、型号不匹配、确认串、异步上传启动）。
 
 ## 目录
 
@@ -401,7 +417,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 XPrint/
   pyproject.toml
   src/xprint/
-    server.py          # MCP 入口（stdio / streamable HTTP）+ 25 个工具
+    server.py          # MCP 入口（stdio / streamable HTTP）+ 27 个工具
     cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|view|image|preview
     config.py          # config.json / secrets / 环境变量优先级
     workspace.py       # ~/.xprint 布局 + safe_path 沙箱
@@ -435,6 +451,7 @@ XPrint/
 | 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert；9 工具头 preflight |
 | 切片后发送打印机 | ✅ Moonraker / OctoPrint / Bambu LAN / PrusaLink / 声明式 HTTP 适配器，`send`（上传+启动）与 `printer_cancel`；Snapmaker U1 真机打印完成（25 层 / 325 s）；Bambu 与 PrusaLink 未真机验证 |
 | 交互式 3D 查看 | ✅ `model_view` 导出单文件 `viewer.html`：WebGL 旋转/缩放/平移/自旋/截图，无外部依赖 |
+| 打印前检查与摆放 | ✅ `printability_check` / `orientation_plan`：薄壁、悬垂、支撑体积估计、热床接触、24 向摆放评分 |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。
 - **M0.5（完成，2026-11-14）**：沙箱化 build123d 执行器、概念图生成、四视图预览、两条建模闭环、导出、11 个工具。
@@ -442,4 +459,5 @@ XPrint/
 - **M1（完成，2026-11-14）**：云端文/图生 3D（Tripo V3、混元 3D Pro）异步任务、下载与 STL 转换，14 个工具。
 - **M2（完成，2026-11-14）**：切片器适配（Orca 外部进程，profile 运行时读取，overrides 私有副本）、`slice_capabilities`/`slice_plan`/`slice_run`/`slice_inspect`、G-code 与 statistics 双源元数据，18 个工具。Snapmaker U1 因厂商 CLI 段错误暂不可用。
 - **M3（完成，2026-11-14）**：打印机 CRUD、Moonraker/OctoPrint/Bambu LAN/PrusaLink/声明式 HTTP 适配器、`send` 上传+启动、`printer_cancel`，24 个工具；Snapmaker U1 真机完成切片→上传→打印（25 层 / 325 s / 662 mm）。Bambu 与 PrusaLink 只有单元测试。
+- **M3.6（完成，2026-11-14）**：新增 `printability_check` 与 `orientation_plan` 两个只读几何工具（薄壁射线估计、悬垂/支撑估计、热床适配、24 向摆放排序），27 个工具。
 - **M3.5（已移除，2026-11-14）**：曾实现并安装 DSH 左侧栏只读面板；因与对话流里的 `model_preview` 重复、维护成本高，当日卸载并删除。交互式 3D 改由 `model_view` 的单文件 HTML 提供，25 个工具。

@@ -47,6 +47,8 @@ def test_handshake_and_tools_list() -> None:
         "model_show",
         "model_view",
         "model_write",
+        "orientation_plan",
+        "printability_check",
         "printer_cancel",
         "printer_list",
         "printer_remove",
