@@ -162,15 +162,26 @@ def default_config_dict(workspace: str = DEFAULT_WORKSPACE) -> dict[str, Any]:
         "workspace": workspace,
         "providers": {
             "cloud": {
-                "hunyuan": {
-                    "adapter": "hunyuan",
-                    "base_url": "https://api.ai3d.cloud.tencent.com",
-                    "api_key_env": "HUNYUAN3D_API_KEY",
-                },
                 "tripo": {
                     "adapter": "tripo",
-                    "base_url": "https://api.tripo3d.ai",
+                    "enabled": True,
+                    "base_url": "https://openapi.tripo3d.com/v3",
+                    "model": "v3.1-20260211",
                     "api_key_env": "TRIPO_API_KEY",
+                    "scale": 1000,
+                    "timeout_s": 600,
+                    "poll_interval_s": 3,
+                },
+                "hunyuan": {
+                    "adapter": "hunyuan",
+                    "enabled": True,
+                    "region": "ap-guangzhou",
+                    "model": "3.0",
+                    "secret_id_env": "TENCENTCLOUD_SECRET_ID",
+                    "secret_key_env": "TENCENTCLOUD_SECRET_KEY",
+                    "scale": 1,
+                    "timeout_s": 600,
+                    "poll_interval_s": 3,
                 },
             },
             "local": {},
@@ -340,6 +351,17 @@ class Secrets:
         """Return one top-level secrets section as a dict (empty when absent)."""
         value = self._data.get(name)
         return value if isinstance(value, dict) else {}
+
+    def provider_field(self, provider_id: str, field_name: str) -> str | None:
+        """Read one named field from ``providers.<id>`` (e.g. a SecretId)."""
+        providers = self._data.get("providers")
+        if not isinstance(providers, dict):
+            return None
+        value = providers.get(provider_id)
+        if not isinstance(value, dict):
+            return None
+        field_value = value.get(field_name)
+        return field_value.strip() if isinstance(field_value, str) and field_value.strip() else None
 
     def provider_key(self, provider_id: str, *, api_key_env: str | None = None) -> str | None:
         """Resolve a key from env first, then secrets.json."""

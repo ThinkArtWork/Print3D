@@ -13,6 +13,7 @@ import os
 import secrets
 import shutil
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from .blender import run_blender
 from .blender_policy import check_blender_script
 from .cad import run_script
 from .capabilities import build_capabilities, build_system_status
+from .cloud import build_provider, download_model, to_stl
 from .config import ImageProviderSettings, LoadedConfig, Secrets, load_all
 from .errors import (
     AdapterUnavailable,
@@ -872,6 +874,209 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "stdout_tail": result.stdout[-1500:],
                 "stderr_tail": result.stderr[-1500:],
                 "hint": hint,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="generate_cloud",
+        description=(
+            "Generate a 3D model with a cloud provider (tripo or hunyuan) in the "
+            "background. Configure it in providers.cloud.<id> (adapter, key env, "
+            "scale, timeout). XPrint submits the task, polls it, downloads the "
+            "result, converts it to STL, records real geometry checks and stores "
+            "a versioned asset. Returns a job_id: poll job_status until succeeded, "
+            "then call model_preview. WRITES files and spends provider credits: "
+            "confirm must be exactly 'CLOUD <name>'."
+        ),
+    )
+    def generate_cloud(
+        provider: str,
+        name: str,
+        confirm: str,
+        prompt: str = "",
+        image: str = "",
+        timeout_s: int = 0,
+    ) -> dict[str, Any]:
+        try:
+            name = validate_name(name)
+            expected = f"CLOUD {name}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            if not prompt.strip() and not image:
+                raise InvalidArgument(
+                    "Provide prompt, image, or both",
+                    hint="Cloud providers accept a text prompt, a reference image, or both.",
+                )
+
+            entry = rt.loaded.config.providers.cloud.get(provider)
+            if entry is None:
+                raise InvalidArgument(
+                    f"Unknown cloud provider: {provider}",
+                    hint="Add providers.cloud.<id> to config.json; `xprint config` shows the file.",
+                    details={"configured": sorted(rt.loaded.config.providers.cloud)},
+                )
+            if not entry.get("enabled", True):
+                raise AdapterUnavailable(
+                    f"Cloud provider {provider!r} is disabled",
+                    hint="Set providers.cloud.<id>.enabled to true.",
+                )
+            adapter = str(entry.get("adapter") or provider).lower()
+
+            image_path: Path | None = None
+            if image:
+                image_path = Path(image).expanduser().resolve()
+                if not image_path.is_file():
+                    raise NotFound(
+                        f"Image not found: {image_path}",
+                        hint="Call reference_import first or pass a valid path.",
+                    )
+                if not sniff_image_mime(image_path.read_bytes()):
+                    raise InvalidArgument(
+                        f"Not a PNG/JPEG/WebP image: {image_path.name}",
+                        hint="Convert the reference to PNG or JPEG first.",
+                    )
+                if image_path.stat().st_size > MAX_IMAGE_BYTES:
+                    raise InvalidArgument("The reference image is larger than 12 MB")
+
+            api_key = rt.secrets.provider_key(provider, api_key_env=entry.get("api_key_env"))
+            secret_id = os.environ.get(str(entry.get("secret_id_env") or "")) or (
+                rt.secrets.provider_field(provider, "secret_id")
+            )
+            secret_key = os.environ.get(str(entry.get("secret_key_env") or "")) or (
+                rt.secrets.provider_field(provider, "secret_key")
+            )
+            if adapter == "tripo" and not api_key:
+                raise AdapterUnavailable(
+                    "No Tripo API key",
+                    hint=f"Set {entry.get('api_key_env') or 'TRIPO_API_KEY'}.",
+                )
+            if adapter == "hunyuan" and not (secret_id and secret_key):
+                raise AdapterUnavailable(
+                    "No Tencent Cloud credentials for Hunyuan 3D",
+                    hint="Set TENCENTCLOUD_SECRET_ID and TENCENTCLOUD_SECRET_KEY.",
+                )
+
+            scale = float(entry.get("scale") or 1.0)
+            if scale <= 0:
+                raise ConfigError(
+                    f"providers.cloud.{provider}.scale must be positive",
+                    hint="Tripo GLB output is in meters: use 1000 for millimeters.",
+                )
+            budget = float(timeout_s or entry.get("timeout_s") or 600)
+            poll_interval = float(entry.get("poll_interval_s") or 3.0)
+            mode = "both" if prompt.strip() and image else ("image" if image else "text")
+
+            def work(job_id: str) -> dict[str, Any]:
+                client = build_provider(
+                    provider,
+                    entry,
+                    api_key=api_key,
+                    secret_id=secret_id,
+                    secret_key=secret_key,
+                )
+                try:
+                    task_id = client.submit(
+                        prompt=(prompt.strip() or None),
+                        image=(image_path.read_bytes() if image_path else None),
+                    )
+                    rt.store.set_progress(job_id, 0.05, message=f"{provider} task {task_id}")
+                    deadline = time.monotonic() + budget
+                    task = None
+                    while True:
+                        task = client.poll(task_id)
+                        progress = max(5.0, min(float(task.progress or 5), 95.0)) / 100.0
+                        rt.store.set_progress(
+                            job_id, progress, message=f"{provider}: {task.status}"
+                        )
+                        if task.status == "success":
+                            break
+                        if task.status in {"failed", "cancelled"}:
+                            raise AdapterUnavailable(
+                                f"{provider} task {task.status}: {task.error or 'no detail'}",
+                                hint="Check the provider dashboard and your credits.",
+                                details={"task_id": task_id},
+                            )
+                        if time.monotonic() >= deadline:
+                            raise AdapterUnavailable(
+                                f"{provider} task did not finish within {int(budget)} s",
+                                hint="Raise providers.cloud.<id>.timeout_s and retry.",
+                                details={"task_id": task_id},
+                            )
+                        time.sleep(max(0.2, poll_interval))
+                    if not task.model_url:
+                        raise AdapterUnavailable(
+                            f"{provider} finished without a model URL",
+                            details={"task_id": task_id},
+                        )
+                    raw, suffix = download_model(task.model_url)
+                    stl = to_stl(raw, suffix, scale=scale)
+                    staging = rt.workspace.safe_path(f"cache/cloud/{job_id}", create_parents=True)
+                    stl_path = staging / "model.stl"
+                    atomic_write_bytes(stl_path, stl, mode=0o644)
+                    artifacts = {"model.stl": stl_path}
+                    if suffix != ".stl":
+                        original = staging / f"model{suffix}"
+                        atomic_write_bytes(original, raw, mode=0o644)
+                        artifacts[f"model{suffix}"] = original
+
+                    checks = stats_for_stl(stl_path)
+                    checks["engine"] = f"cloud:{provider}"
+                    checks["provider_task"] = task_id
+                    assets = AssetStore(rt.workspace)
+                    manifest = assets.create(name, kind="cloud")
+                    record = assets.add_revision(
+                        manifest["asset_id"],
+                        "# cloud generator: no script is produced\n",
+                        prompt=prompt,
+                        model=f"cloud:{provider}",
+                        modeler="cloud",
+                        usage={
+                            "provider": provider,
+                            "task_id": task_id,
+                            "credits": task.credits,
+                        },
+                        checks=checks,
+                        reference=image_path,
+                        reference_meta=(
+                            {"source_path": str(image_path), "mode": mode} if image_path else None
+                        ),
+                        artifacts=artifacts,
+                        kind="cloud",
+                    )
+                    rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.stl")
+                    return {
+                        "asset_id": manifest["asset_id"],
+                        "name": name,
+                        "revision": record["revision"],
+                        "provider": provider,
+                        "mode": mode,
+                        "task_id": task_id,
+                        "checks": checks,
+                        "artifacts": sorted(record.get("artifacts", {})),
+                    }
+                finally:
+                    client.close()
+
+            runner = rt.runner or JobRunner(rt.store)
+            job = runner.submit(
+                "cloud.generate",
+                work,
+                params={"provider": provider, "name": name, "mode": mode},
+                provider=provider,
+            )
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "job_id": job.id,
+                "provider": provider,
+                "adapter": adapter,
+                "mode": mode,
+                "timeout_s": budget,
+                "hint": "Poll job_status(job_id); on success call model_preview(asset_id).",
             }
         except XPrintError as exc:
             return tool_error(exc)

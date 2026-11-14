@@ -38,6 +38,7 @@ def test_handshake_and_tools_list() -> None:
         "asset_list",
         "blender_run",
         "capabilities",
+        "generate_cloud",
         "generate_local",
         "image_generate",
         "job_status",

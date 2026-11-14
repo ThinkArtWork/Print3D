@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染，以及 **13 个工具**（含 Blender bpy 与本地生成器两条额外路径）。切片与打印适配器在 M2 之后接入。
+> 状态：**M0 + 建模闭环已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染，以及 **14 个工具**（含 Blender bpy 与本地生成器两条额外路径）。切片与打印适配器在 M2 之后接入。
 
 ## 文档
 
@@ -142,6 +142,51 @@ generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>"
 
 占位符：`{prompt}` `{image}` `{outdir}` `{name}` `{mode}`；`command`/`args` 可以是列表或 shell 字符串（字符串按 `shlex` 切分，不经过 shell）。`capabilities.providers.local` 会显示命令是否存在、是否启用以及 `mode`。
 
+### 路径五：云端生成（Tripo / 混元 3D）
+
+云 provider 是异步任务：提交 → 轮询 → 下载 → 转 STL → 建资产 → 预览。不需要本机能跑模型。
+
+```json
+// ~/.xprint/config.json —— providers.cloud.<id>
+{
+  "providers": {
+    "cloud": {
+      "tripo": {
+        "adapter": "tripo",
+        "base_url": "https://openapi.tripo3d.com/v3",
+        "model": "v3.1-20260211",
+        "api_key_env": "TRIPO_API_KEY",
+        "scale": 1000,
+        "timeout_s": 600
+      },
+      "hunyuan": {
+        "adapter": "hunyuan",
+        "region": "ap-guangzhou",
+        "model": "3.0",
+        "secret_id_env": "TENCENTCLOUD_SECRET_ID",
+        "secret_key_env": "TENCENTCLOUD_SECRET_KEY",
+        "scale": 1,
+        "timeout_s": 600
+      }
+    }
+  }
+}
+```
+
+```text
+generate_cloud(provider="tripo", prompt=..., image=..., confirm="CLOUD <name>")
+   → 提交文生/图生任务，立即返回 job_id（真后台）
+   → job_status 轮询：progress 5–95%，message 显示 provider 状态
+   → success：下载 model_url → trimesh 转 STL（支持 GLB/OBJ/GLTF/FBX）
+   → 存 model.stl（+ 原始 model.glb/obj），geometry checks，资产 kind=cloud
+   → model_preview(asset_id)
+```
+
+- 凭据：Tripo 用 `TRIPO_API_KEY`（Bearer）；混元用腾讯云 `TENCENTCLOUD_SECRET_ID`/`TENCENTCLOUD_SECRET_KEY`（TC3-HMAC-SHA256 签名，`region` 默认 `ap-guangzhou`，接口 `ai3d.tencentcloudapi.com`，Version `2025-05-13`）。`capabilities.providers.cloud` 只显示是否配置，不返回密钥。
+- 尺度：Tripo 的 GLB 按米导出，`scale: 1000` 换成毫米；混元直接请求 `ResultFormat: STL`，`scale: 1`。转换后仍以 STL 的真实 bbox/volume 为准。
+- 计费：每次生成消耗 provider 额度；Tripo 的 `credits_consumed` 会写进资产 `usage`。
+- 失败：provider 的 `error_message` 与 `task_id` 进入 job 错误；轮询超时由 `timeout_s`（默认 600 s）控制。
+
 ## 工具
 
 | 工具 | 写操作 | 说明 |
@@ -153,6 +198,7 @@ generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>"
 | `model_show` | 否 | 读回资产清单、指定版本源码、`params.json` 与 reference |
 | `blender_run` | 是 | 用 Blender 后台模式执行 bpy 脚本，导出 STL/GLB 并检查；`confirm` 精确为 `BLENDER <name>` / `BLENDER <asset_id>` |
 | `generate_local` | 是 | 后台运行 `providers.local.<id>` 命令生成 STL，建资产并返回 `job_id`；`confirm` 精确为 `LOCAL <name>` |
+| `generate_cloud` | 是 | 后台提交 Tripo/混元 3D 任务，轮询后下载并转 STL 建资产；`confirm` 精确为 `CLOUD <name>` |
 | `image_generate` | 是 | 文生概念图并存入 `references/`；`confirm` 精确为 `IMAGE <name>`，图片内联返回 |
 | `reference_import` | 是 | 把用户已有的草图/照片导入为 reference；`confirm` 精确为 `IMPORT <name>` |
 | `model_write` | 是 | 存入 build123d 脚本（新建或追加版本，可带 reference）；`confirm` 精确为 `WRITE <name>` / `WRITE <asset_id>` |
@@ -179,7 +225,7 @@ generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>"
 .venv/bin/python -m ruff format src tests
 ```
 
-测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`asset_export`/`reference_import`/`blender_run`/`generate_local`、MCP stdio 握手与 HTTP Bearer 鉴权。
+测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`asset_export`/`reference_import`/`blender_run`/`generate_local`/`generate_cloud`、MCP stdio 握手与 HTTP Bearer 鉴权。
 
 ## 目录
 
@@ -187,7 +233,7 @@ generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>"
 XPrint/
   pyproject.toml
   src/xprint/
-    server.py          # MCP 入口（stdio / streamable HTTP）+ 13 个工具
+    server.py          # MCP 入口（stdio / streamable HTTP）+ 14 个工具
     cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|image|preview
     config.py          # config.json / secrets / 环境变量优先级
     workspace.py       # ~/.xprint 布局 + safe_path 沙箱
@@ -214,13 +260,13 @@ XPrint/
 | 图片理解 | ✅ 多模态宿主模型看图 + `reference_import`/`image_generate` 存 reference，预览时回传对比 |
 | Blender 文/图生 3D | ✅ `blender_run`（bpy 脚本 → STL/GLB + 四视图）；图生 3D 由宿主模型看图写场景 |
 | 本地模型文/图生 3D | ✅ `generate_local` 通用命令适配器（TripoSR / Hunyuan3D / ComfyUI 等，以本机命令为准） |
-| 云端图生 3D（Tripo/混元） | ⏳ 未实现：`capabilities` 已探测 key；下一步接 `generate_cloud` 异步任务 |
+| 云端文/图生 3D（Tripo/混元） | ✅ `generate_cloud` 异步任务 + 下载 + 转 STL + 预览（需配置 key） |
 | 导出模型文件 | ✅ `asset_export`（STL/STEP/脚本） |
 | 切片 + 发送打印机 | ⏳ 未实现：M2 切片适配、M3 打印机 CRUD + 发送 |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。
 - **M0.5（完成，2026-11-14）**：沙箱化 build123d 执行器、概念图生成、四视图预览、两条建模闭环、导出、11 个工具。
 - **M0.6（完成，2026-11-14）**：Blender bpy 路径（`blender_run`）与本地生成器适配器（`generate_local` + 后台任务），13 个工具。
-- **M1**：云端图生 3D（Hunyuan/Tripo）异步任务与导入；图像 provider 扩展。
+- **M1（完成，2026-11-14）**：云端文/图生 3D（Tripo V3、混元 3D Pro）异步任务、下载与 STL 转换，14 个工具。
 - **M2**：切片器适配（Orca/Bambu 外部进程，profile 运行时读取）与产物审计。
 - **M3**：打印机 CRUD（Moonraker / PrusaLink）、`send` + 审批流。

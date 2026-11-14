@@ -488,3 +488,97 @@ def test_generate_local_requires_prompt_or_image(workspace) -> None:
     )
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_argument"
+
+
+def test_generate_cloud_creates_an_asset(workspace, monkeypatch) -> None:
+    from tests.stl_helpers import binary_stl_bytes
+
+    from xprint.cloud import CloudTask
+
+    class FakeCloud:
+        def submit(self, *, prompt=None, image=None):
+            assert prompt == "a bracket"
+            return "task-42"
+
+        def poll(self, task_id):
+            return CloudTask(
+                task_id=task_id,
+                status="success",
+                progress=100,
+                model_url="https://cdn.test/model.stl",
+                credits=10.0,
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("xprint.server.build_provider", lambda *a, **k: FakeCloud())
+    monkeypatch.setattr(
+        "xprint.server.download_model",
+        lambda url, **k: (binary_stl_bytes(), ".stl"),
+    )
+
+    workspace.config_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "cloud": {"tripo": {"adapter": "tripo", "api_key_env": "TRIPO_API_KEY"}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRIPO_API_KEY", "test-key")
+    runtime = _runtime(workspace)
+
+    submitted = call(
+        runtime,
+        "generate_cloud",
+        {
+            "provider": "tripo",
+            "name": "cloud-tetra",
+            "confirm": "CLOUD cloud-tetra",
+            "prompt": "a bracket",
+        },
+    )
+    assert submitted["ok"] is True, submitted
+    job_id = submitted["job_id"]
+
+    import time
+
+    deadline = time.monotonic() + 15
+    status = None
+    while time.monotonic() < deadline:
+        status = call(runtime, "job_status", {"job_id": job_id})
+        if status["job"]["state"] in {"succeeded", "failed", "cancelled"}:
+            break
+        time.sleep(0.05)
+
+    assert status is not None
+    assert status["job"]["state"] == "succeeded", status
+    result = status["job"]["result"]
+    assert result["checks"]["triangles"] == 4
+    assert result["checks"]["engine"] == "cloud:tripo"
+    assert result["task_id"] == "task-42"
+    assets = call(runtime, "asset_list", {})
+    assert any(item["name"] == "cloud-tetra" for item in assets["assets"])
+
+
+def test_generate_cloud_rejects_confirm_and_unknown_provider(workspace) -> None:
+    runtime = _runtime(workspace)
+    payload = call(
+        runtime,
+        "generate_cloud",
+        {"provider": "tripo", "name": "cube", "confirm": "LOCAL cube", "prompt": "x"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "confirmation_mismatch"
+
+    payload = call(
+        runtime,
+        "generate_cloud",
+        {"provider": "nope", "name": "cube", "confirm": "CLOUD cube", "prompt": "x"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "providers.cloud" in (payload["error"]["hint"] or "")

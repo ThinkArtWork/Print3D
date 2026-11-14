@@ -9,6 +9,7 @@ install instead of guessing.
 from __future__ import annotations
 
 import importlib.util
+import os
 import platform
 import shutil
 import sys
@@ -37,13 +38,33 @@ def probe_providers(cfg: LoadedConfig, secrets: Secrets) -> dict[str, Any]:
     cloud = []
     for provider_id, entry in sorted(config.providers.cloud.items()):
         adapter = str(entry.get("adapter", provider_id))
+        if adapter == "hunyuan":
+            secret_id = os.environ.get(str(entry.get("secret_id_env") or "")) or (
+                secrets.provider_field(provider_id, "secret_id")
+            )
+            secret_key = os.environ.get(str(entry.get("secret_key_env") or "")) or (
+                secrets.provider_field(provider_id, "secret_key")
+            )
+            has_key = bool(secret_id and secret_key)
+            key_source = (
+                "env"
+                if os.environ.get(str(entry.get("secret_id_env") or ""))
+                else ("secrets" if secret_id else None)
+            )
+        else:
+            has_key = secrets.has_key(provider_id, api_key_env=entry.get("api_key_env"))
+            key_source = secrets.key_source(provider_id, api_key_env=entry.get("api_key_env"))
+        enabled = bool(entry.get("enabled", True))
         cloud.append(
             {
                 "id": provider_id,
                 "adapter": adapter,
-                "base_url": entry.get("base_url"),
-                "has_key": secrets.has_key(provider_id, api_key_env=entry.get("api_key_env")),
-                "key_source": secrets.key_source(provider_id, api_key_env=entry.get("api_key_env")),
+                "enabled": enabled,
+                "base_url": entry.get("base_url") or entry.get("region"),
+                "model": entry.get("model"),
+                "has_key": has_key,
+                "key_source": key_source,
+                "ready": bool(enabled and has_key),
                 "configured": True,
             }
         )
@@ -74,7 +95,7 @@ def probe_providers(cfg: LoadedConfig, secrets: Secrets) -> dict[str, Any]:
         "cloud": cloud,
         "local": local,
         "default": config.providers.default,
-        "usable": [item["id"] for item in cloud if item["has_key"]],
+        "usable": [item["id"] for item in cloud if item["ready"]],
     }
 
 
@@ -236,6 +257,7 @@ def build_capabilities(
         "adapters": registry.snapshot(),
         "summary": {
             "cloud_providers_usable": len(providers["usable"]),
+            "cloud_providers_ready": sum(1 for item in providers["cloud"] if item["ready"]),
             "image_providers_ready": sum(1 for item in images if item["ready"]),
             "local_providers": len(providers["local"]),
             "local_providers_ready": sum(
