@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from xprint.config import Secrets
-from xprint.workspace import Workspace
+from print3d.config import Secrets
+from print3d.workspace import Workspace
 
 ENV_KEYS = (
-    "XPRINT_WORKSPACE",
-    "XPRINT_CONFIG",
-    "XPRINT_HOST",
-    "XPRINT_PORT",
-    "XPRINT_TOKEN",
-    "XPRINT_HUNYUAN_API_KEY",
-    "XPRINT_TRIPO_API_KEY",
+    "PRINT3D_WORKSPACE",
+    "PRINT3D_CONFIG",
+    "PRINT3D_HOST",
+    "PRINT3D_PORT",
+    "PRINT3D_TOKEN",
+    "PRINT3D_HUNYUAN_API_KEY",
+    "PRINT3D_TRIPO_API_KEY",
     "HUNYUAN3D_API_KEY",
     "TRIPO_API_KEY",
     "OPENAI_API_KEY",
@@ -25,12 +25,12 @@ ENV_KEYS = (
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point XPrint at a throwaway workspace and drop ambient credentials."""
+    """Point 3DPrint at a throwaway workspace and drop ambient credentials."""
 
     workspace = tmp_path / "ws"
     for key in ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("XPRINT_WORKSPACE", str(workspace))
+    monkeypatch.setenv("PRINT3D_WORKSPACE", str(workspace))
     return workspace
 
 

@@ -11,8 +11,8 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from tests.stl_helpers import write_stl
 from tests.test_slicers import _fake_slicer, _vendor
 
-from xprint.assets import AssetStore
-from xprint.server import Runtime, build_server
+from print3d.assets import AssetStore
+from print3d.server import Runtime, build_server
 
 SCRIPT = """\
 from build123d import *

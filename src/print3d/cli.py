@@ -1,6 +1,6 @@
 """Command line interface.
 
-``xprint`` is the operator-facing surface: it starts the MCP server, prints
+``3dprint`` is the operator-facing surface: it starts the MCP server, prints
 capabilities, and manages the workspace.  Every command prints JSON unless it
 is a human-only convenience (``init``, ``serve``), so scripts can pipe it.
 """
@@ -17,12 +17,12 @@ from typing import Any
 from . import __version__
 from .capabilities import build_capabilities, build_system_status
 from .config import Secrets, load_all, write_config
-from .errors import XPrintError, error_payload
+from .errors import Print3DError, error_payload
 from .jobs import JobStore
 from .registry import builtin_registry
 from .workspace import Workspace
 
-DEFAULT_WORKSPACE = "~/.xprint"
+DEFAULT_WORKSPACE = "~/.3dprint"
 
 
 def _print_json(data: Any) -> None:
@@ -64,7 +64,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         )
     )
     print(
-        "next: add API keys to secrets.json (see README) and run `xprint capabilities`",
+        "next: add API keys to secrets.json (see README) and run `3dprint capabilities`",
         file=sys.stderr,
     )
     return 0
@@ -186,7 +186,7 @@ def cmd_image(args: argparse.Namespace) -> int:
         )
     if not provider_id or provider_id not in configured:
         known = ", ".join(sorted(configured)) or "(none)"
-        raise XPrintError(
+        raise Print3DError(
             f"Unknown image provider: {provider_id or '(none)'}",
             hint=f"Configured image providers: {known}",
         )
@@ -231,12 +231,14 @@ def cmd_preview(args: argparse.Namespace) -> int:
     manifest = assets.load(args.asset_id)
     target = args.revision or assets.latest_revision(manifest)
     if not target:
-        raise XPrintError(f"Asset {args.asset_id} has no revisions", hint="Call model_write first.")
+        raise Print3DError(
+            f"Asset {args.asset_id} has no revisions", hint="Call model_write first."
+        )
     stl = assets.revision_dir(args.asset_id, target) / "model.stl"
     if not stl.is_file():
-        raise XPrintError(
+        raise Print3DError(
             f"Revision {target} has no built model",
-            hint="Call model_build (or `xprint cad run`) first.",
+            hint="Call model_build (or `3dprint cad run`) first.",
         )
     views = tuple(item.strip().lower() for item in (args.views or "").split(",") if item.strip())
     png = render_views(
@@ -281,12 +283,14 @@ def cmd_view(args: argparse.Namespace) -> int:
     manifest = assets.load(args.asset_id)
     target = args.revision or assets.latest_revision(manifest)
     if not target:
-        raise XPrintError(f"Asset {args.asset_id} has no revisions", hint="Call model_write first.")
+        raise Print3DError(
+            f"Asset {args.asset_id} has no revisions", hint="Call model_write first."
+        )
     stl = assets.revision_dir(args.asset_id, target) / "model.stl"
     if not stl.is_file():
-        raise XPrintError(
+        raise Print3DError(
             f"Revision {target} has no built model",
-            hint="Call model_build (or `xprint cad run`) first.",
+            hint="Call model_build (or `3dprint cad run`) first.",
         )
     name = str(manifest.get("name") or args.asset_id)
     entries = []
@@ -305,9 +309,9 @@ def cmd_view(args: argparse.Namespace) -> int:
             )
         )
     if not entries:
-        raise XPrintError(
+        raise Print3DError(
             f"Asset {args.asset_id} has no built revisions",
-            hint="Call model_build (or `xprint cad run`) first.",
+            hint="Call model_build (or `3dprint cad run`) first.",
         )
     path = (
         Path(args.out).expanduser() if args.out else assets.asset_dir(args.asset_id) / VIEWER_FILE
@@ -354,7 +358,7 @@ def cmd_view(args: argparse.Namespace) -> int:
 
 
 def cmd_version(args: argparse.Namespace) -> int:
-    _print_json({"ok": True, "name": "xprint", "version": __version__})
+    _print_json({"ok": True, "name": "3dprint", "version": __version__})
     return 0
 
 
@@ -363,14 +367,14 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="xprint",
+        prog="3dprint",
         description="Self-hosted MCP bridge for 3D-printing tools.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--workspace", default=os.environ.get("XPRINT_WORKSPACE", DEFAULT_WORKSPACE)
+        "--workspace", default=os.environ.get("PRINT3D_WORKSPACE", DEFAULT_WORKSPACE)
     )
     common.add_argument("--config", default=None, help="explicit config.json path")
 
@@ -453,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except XPrintError as exc:
+    except Print3DError as exc:
         _print_json({"ok": False, "error": error_payload(exc)})
         return 2
     except KeyboardInterrupt:

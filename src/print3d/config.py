@@ -3,13 +3,13 @@
 Layering (highest wins):
 
 1. CLI flags (``--workspace``, ``--config``, ``--host``, ``--port``)
-2. environment variables (``XPRINT_WORKSPACE``, ``XPRINT_CONFIG``, ...)
+2. environment variables (``PRINT3D_WORKSPACE``, ``PRINT3D_CONFIG``, ...)
 3. ``<workspace>/config.json``
 4. built-in defaults
 
 API keys are never stored in ``config.json``.  They come from the environment
 (variable named by the provider entry's ``api_key_env``, else
-``XPRINT_<ID>_API_KEY``, else ``<ID>_API_KEY``) or from ``secrets.json`` with
+``PRINT3D_<ID>_API_KEY``, else ``<ID>_API_KEY``) or from ``secrets.json`` with
 mode ``0600``.  Only ``has_key`` ever leaves this module.
 """
 
@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .errors import ConfigError
 from .workspace import DEFAULT_WORKSPACE, Workspace, atomic_write_text
 
-ENV_PREFIX = "XPRINT_"
+ENV_PREFIX = "PRINT3D_"
 
 
 class ServerSettings(BaseModel):
@@ -35,7 +35,7 @@ class ServerSettings(BaseModel):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
-    token_env: str = "XPRINT_TOKEN"
+    token_env: str = "PRINT3D_TOKEN"
 
 
 class ProvidersSettings(BaseModel):
@@ -183,9 +183,9 @@ class LoadedConfig:
 
 
 def default_config_dict(workspace: str = DEFAULT_WORKSPACE) -> dict[str, Any]:
-    """The config written by ``xprint init`` — no secrets, no machine paths."""
+    """The config written by ``3dprint init`` — no secrets, no machine paths."""
     return {
-        "server": {"host": "127.0.0.1", "port": 8765, "token_env": "XPRINT_TOKEN"},
+        "server": {"host": "127.0.0.1", "port": 8765, "token_env": "PRINT3D_TOKEN"},
         "workspace": workspace,
         "providers": {
             "cloud": {
@@ -248,7 +248,7 @@ def _read_json(path: Path) -> Any:
     except json.JSONDecodeError as exc:
         raise ConfigError(
             f"Invalid JSON in {path} at line {exc.lineno} column {exc.colno}: {exc.msg}",
-            hint="Fix the JSON syntax, or delete the file and run `xprint init`.",
+            hint="Fix the JSON syntax, or delete the file and run `3dprint init`.",
             details={"path": str(path)},
         ) from exc
 
@@ -291,7 +291,7 @@ def load_config(
             where = ".".join(str(part) for part in first.get("loc", ())) or "<root>"
             raise ConfigError(
                 f"Invalid config at {where}: {first.get('msg')}",
-                hint=f"Fix {config_path} or run `xprint init --force`.",
+                hint=f"Fix {config_path} or run `3dprint init --force`.",
                 details={"path": str(config_path), "errors": exc.errors()[:5]},
             ) from exc
         exists = True
@@ -299,7 +299,7 @@ def load_config(
         cfg = Config.model_validate(default_config_dict(base_workspace))
         exists = False
         warnings.append(
-            f"No config at {config_path}; using defaults (run `xprint init` to write one)."
+            f"No config at {config_path}; using defaults (run `3dprint init` to write one)."
         )
 
     # Environment overrides (flags are applied by the CLI on top).
@@ -314,7 +314,7 @@ def load_config(
 
 
 def write_config(loaded: LoadedConfig, *, force: bool = False) -> Path:
-    """Write the current config back to disk (used by ``xprint init``)."""
+    """Write the current config back to disk (used by ``3dprint init``)."""
     target = loaded.path or Path(loaded.config.workspace).expanduser() / "config.json"
     if target.exists() and not force:
         raise ConfigError(

@@ -2,7 +2,7 @@
 
 The client model writes the script (text-to-3D); for image-to-3D it also gets
 the picture as a normal MCP image block and may read the same file from
-``sys.argv`` after ``--``.  XPrint only provides the execution + export +
+``sys.argv`` after ``--``.  3DPrint only provides the execution + export +
 geometry-check loop.
 """
 
@@ -35,7 +35,7 @@ import bpy
 import json
 import os
 
-out = os.environ["XPRINT_BLENDER_OUT"]
+out = os.environ["PRINT3D_BLENDER_OUT"]
 meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
 for obj in meshes:
     obj.select_set(True)
@@ -51,7 +51,7 @@ if meshes:
         export_format="GLB",
         use_selection=True,
     )
-print("XPRINT_BLENDER_EXPORT " + json.dumps({"objects": len(meshes)}))
+print("PRINT3D_BLENDER_EXPORT " + json.dumps({"objects": len(meshes)}))
 """
 
 
@@ -133,14 +133,14 @@ def run_blender(
     directory = Path(workdir)
     directory.mkdir(parents=True, exist_ok=True)
     scene_path = directory / "scene.py"
-    export_path = directory / "xprint_export.py"
+    export_path = directory / "3dprint_export.py"
     atomic_write_text(scene_path, script, mode=0o600)
     atomic_write_text(export_path, EXPORT_SCRIPT, mode=0o600)
 
     env = clean_env()
     env.update(
         {
-            "XPRINT_BLENDER_OUT": str(directory),
+            "PRINT3D_BLENDER_OUT": str(directory),
             "BLENDER_USER_CONFIG": str(directory / ".blender-config"),
             "BLENDER_USER_SCRIPTS": str(directory / ".blender-scripts"),
             "BLENDER_USER_DATAFILES": str(directory / ".blender-data"),

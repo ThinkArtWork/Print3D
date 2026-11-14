@@ -11,8 +11,8 @@ import pytest
 import respx
 from PIL import Image
 
-from xprint.errors import AdapterUnavailable, InvalidArgument, NotFound
-from xprint.images import (
+from print3d.errors import AdapterUnavailable, InvalidArgument, NotFound
+from print3d.images import (
     GeneratedImage,
     ImageGenerator,
     ReferenceStore,

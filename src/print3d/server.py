@@ -1,7 +1,7 @@
 """MCP server wiring: transports, auth, and the M0 tool surface.
 
 The server is intentionally thin.  Tool implementations live in
-:mod:`xprint.tools` and receive a :class:`Runtime`, so they can be unit tested
+:mod:`print3d.tools` and receive a :class:`Runtime`, so they can be unit tested
 without speaking MCP.
 """
 
@@ -46,7 +46,7 @@ from .errors import (
     ConfirmationMismatch,
     InvalidArgument,
     NotFound,
-    XPrintError,
+    Print3DError,
     error_payload,
 )
 from .images import MAX_IMAGE_BYTES, GeneratedImage, ReferenceStore, sniff_image_mime
@@ -100,7 +100,7 @@ from .workspace import Workspace, atomic_write_bytes
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 INSTRUCTIONS = """\
-XPrint is a self-hosted bridge between MCP agents and the 3D-printing tools on
+3DPrint is a self-hosted bridge between MCP agents and the 3D-printing tools on
 this machine.
 
 Safety contract:
@@ -109,7 +109,7 @@ Safety contract:
 - Every tool that writes files or talks to a paid service requires the exact
   `confirm` string documented in its schema.  A wrong string is rejected with
   code `confirmation_mismatch`, nothing is written.
-- XPrint never sends arbitrary G-code to a printer; slicing output is inspected
+- 3DPrint never sends arbitrary G-code to a printer; slicing output is inspected
   and confirmed first.
 
 Start with `capabilities` to learn which providers, CAD backends, image
@@ -150,7 +150,7 @@ Two extra engines reuse the same asset + preview loop:
   image-to-3D, look at the attached image yourself and write the scene.
 - `generate_local` runs a user-installed local generator (configured under
   providers.local.<id>) as a background job; poll `job_status`, then preview the
-  produced asset.  XPrint downloads no weights and calls no cloud API.
+  produced asset.  3DPrint downloads no weights and calls no cloud API.
 
 Both accept `image=` for image-driven work; assets remember the reference.
 
@@ -202,13 +202,13 @@ class Runtime:
 def tool_error(exc: BaseException) -> dict[str, Any]:
     """Convert an exception into the unified error envelope."""
 
-    if isinstance(exc, XPrintError):
+    if isinstance(exc, Print3DError):
         return {"ok": False, "writes_performed": False, "error": error_payload(exc)}
     return {
         "ok": False,
         "writes_performed": False,
         "error": error_payload(
-            XPrintError(str(exc) or exc.__class__.__name__, code="internal_error")
+            Print3DError(str(exc) or exc.__class__.__name__, code="internal_error")
         ),
     }
 
@@ -521,7 +521,7 @@ def _asset_viewer(
     }
 
 
-def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> FastMCP:
+def build_server(runtime: Runtime | None = None, *, name: str = "3dprint") -> FastMCP:
     """Create the FastMCP application with every M0 tool registered."""
 
     rt = runtime or Runtime.create()
@@ -535,14 +535,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         port=port,
     )
     # FastMCP otherwise advertises the ``mcp`` package version; hosts show this
-    # string in their server list, so report XPrint's own version instead.
+    # string in their server list, so report 3DPrint's own version instead.
     if hasattr(server, "_mcp_server"):
         server._mcp_server.version = __version__
 
     @server.tool(
         name="capabilities",
         description=(
-            "Report what this XPrint installation can do right now: cloud image-to-3D "
+            "Report what this 3DPrint installation can do right now: cloud image-to-3D "
             "providers (key present or not), CAD/render backends, slicer profiles and "
             "printers, plus the adapters compiled in. Never returns API keys and never "
             "writes files."
@@ -554,7 +554,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="system_status",
         description=(
-            "Report XPrint version, Python/platform, workspace paths, config/secrets "
+            "Report 3DPrint version, Python/platform, workspace paths, config/secrets "
             "presence and job counters. Read-only: writes_performed is always false."
         ),
     )
@@ -568,7 +568,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "into the workspace as a concept reference, so it can be attached to a "
             "model revision with model_write(reference=...). This is the image-input "
             "half of the text/image -> model path: the client model looks at the "
-            "image and writes the script; XPrint keeps the image as provenance. "
+            "image and writes the script; 3DPrint keeps the image as provenance. "
             "WRITES files: confirm must be exactly 'IMPORT <name>'."
         ),
     )
@@ -634,7 +634,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Now call model_write with reference={relative!r} and confirm='WRITE {name}'."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -722,14 +722,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 ),
             }
             return _image_result(payload, [(image.data, image.mime, None)])
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
         name="model_write",
         description=(
             "Store a build123d script as a new asset revision, without calling any "
-            "LLM. The script must follow XPrint's contract (from build123d import *, "
+            "LLM. The script must follow 3DPrint's contract (from build123d import *, "
             "a build_part() returning one solid, PARAMS in mm, base on z=0) and passes "
             "the static safety checks; nothing is executed here. Use asset_id to "
             "append to an existing asset, or name to create one. Optional `reference` "
@@ -772,7 +772,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             checks = summarise(check_script(script))
             if not checks["ok"]:
                 raise InvalidArgument(
-                    "The script failed XPrint's safety checks; nothing was stored",
+                    "The script failed 3DPrint's safety checks; nothing was stored",
                     hint="See details.issues for line numbers, then call model_write again.",
                     details={"issues": checks["errors"]},
                 )
@@ -829,13 +829,13 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"confirm 'BUILD {manifest['asset_id']}'."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
         name="model_build",
         description=(
-            "Execute a stored asset revision in XPrint's sandboxed build123d "
+            "Execute a stored asset revision in 3DPrint's sandboxed build123d "
             "interpreter (CPU/time/file limits, no API keys in the environment) and "
             "attach the result to that revision. Returns real geometry checks "
             "(watertight, boundary/non-manifold edges, bbox, volume) and stores "
@@ -957,7 +957,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 **viewer,
                 "hint": hint,
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -1072,7 +1072,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "copy them out with asset_export(artifact='svg') or ('dxf')."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -1203,7 +1203,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 ),
             }
             return _image_result(payload, images)
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -1269,7 +1269,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "give the user an open action in DSH."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -1408,14 +1408,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 **viewer,
                 "hint": hint,
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
         name="mesh_fit",
         description=(
             "Fit an existing STL/GLB/OBJ mesh to a real millimetre size and turn "
-            "it into a versioned XPrint asset. This is the finishing step for "
+            "it into a versioned 3DPrint asset. This is the finishing step for "
             "image-to-3D: keep the generated shape, repair it, scale it, seat it on "
             "z=0, centre it, decimate to a preview-friendly triangle budget, then "
             "export STL/GLB and a named viewer. Sizing is explicit: pass "
@@ -1613,7 +1613,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 **viewer,
                 "hint": hint,
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -1621,7 +1621,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         description=(
             "Generate a 3D model with a cloud provider (tripo, hunyuan_openai or "
             "hunyuan TC3) in the background. Configure it in providers.cloud.<id> "
-            "(adapter, key env, scale, timeout). XPrint submits the task, polls it, "
+            "(adapter, key env, scale, timeout). 3DPrint submits the task, polls it, "
             "downloads the result, converts it to STL, records real geometry checks "
             "and stores a versioned asset. Pass optional size_mm=[x,y,z] or "
             "max_dimension_mm=<longest side> to run the same mesh fit after "
@@ -1676,7 +1676,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             if entry is None:
                 raise InvalidArgument(
                     f"Unknown cloud provider: {provider}",
-                    hint="Add providers.cloud.<id> to config.json; `xprint config` shows the file.",
+                    hint="Add providers.cloud.<id> to config.json; `3dprint config` shows the file.",
                     details={"configured": sorted(rt.loaded.config.providers.cloud)},
                 )
             if not entry.get("enabled", True):
@@ -1899,7 +1899,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "timeout_s": budget,
                 "hint": "Poll job_status(job_id); on success open result.viewer_file or call model_preview(asset_id).",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -1908,7 +1908,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Run a user-installed local 3D generator in the background. The provider "
             "is configured in providers.local.<id> as a command + args template with "
             "{prompt}, {image}, {outdir}, {name} placeholders; it must write "
-            '<outdir>/mesh.stl (or print {"mesh": path}). XPrint creates the asset '
+            '<outdir>/mesh.stl (or print {"mesh": path}). 3DPrint creates the asset '
             "from the produced STL, records real geometry checks and returns a "
             "job_id: poll job_status until succeeded, then call model_preview. "
             "No weights are downloaded and no cloud API is called. WRITES files and "
@@ -1943,7 +1943,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Unknown local provider: {provider}",
                     hint=(
                         "Add providers.local.<id> to config.json with command/args; "
-                        "run `xprint config` to see the current file."
+                        "run `3dprint config` to see the current file."
                     ),
                     details={"configured": sorted(rt.loaded.config.providers.local)},
                 )
@@ -2062,7 +2062,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "timeout_s": budget,
                 "hint": "Poll job_status(job_id); on success open result.viewer_file or call model_preview(asset_id).",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2103,7 +2103,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "call orientation_plan for ranked build orientations."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
         except ValueError as exc:
             return tool_error(InvalidArgument(f"Could not inspect the mesh: {exc}"))
@@ -2175,7 +2175,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "reorienting; supports still need slicer settings."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
         except ValueError as exc:
             return tool_error(InvalidArgument(f"Could not inspect the mesh: {exc}"))
@@ -2197,7 +2197,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 problems: list[str] = []
                 try:
                     binary = find_slicer(configured.slicer_path)
-                except XPrintError as exc:
+                except Print3DError as exc:
                     binary = None
                     problems.append(exc.message)
                 info = probe_slicer(binary) if binary is not None else None
@@ -2215,7 +2215,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "filament": [str(item) for item in filaments],
                     }
                     bed = parse_machine_bed(machine)
-                except XPrintError as exc:
+                except Print3DError as exc:
                     problems.append(exc.message)
                 targets.append(
                     {
@@ -2248,7 +2248,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "preset paths; see README."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2343,7 +2343,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             binary = None
             try:
                 binary = find_slicer(configured.slicer_path)
-            except XPrintError as exc:
+            except Print3DError as exc:
                 problems.append(exc.message)
             info = probe_slicer(binary) if binary is not None else None
             if binary is None:
@@ -2422,7 +2422,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "confirm": f"SLICE {asset_id} {target}",
                 "hint": "Run slice_run with the confirm string above; the job is async.",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2610,7 +2610,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"slice_inspect({slice_id}) for the G-code metadata."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2639,7 +2639,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "directory": str(directory),
                 "gcode": gcode_payload or None,
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2689,7 +2689,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "add or update one."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2711,7 +2711,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             if callable(reader):
                 try:
                     calibration = reader()
-                except XPrintError as exc:
+                except Print3DError as exc:
                     calibration = {
                         "source": None,
                         "factors": {},
@@ -2738,7 +2738,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 ),
                 "flow_calibration": calibration,
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2849,7 +2849,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "config_path": str(path),
                 "hint": f"Call printer_status({printer_id!r}) to test the connection.",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -2877,7 +2877,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "config_path": str(path),
                 "hint": "printer_list shows the remaining printers.",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -3062,7 +3062,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "material_warnings": material_warnings,
                 "hint": f"Poll job_status({job.id!r}) for the upload/start result.",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -3091,7 +3091,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "cancelled": True,
                 "hint": f"Call printer_status({printer_id!r}) to confirm it is idle.",
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -3182,7 +3182,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     else "Open the file in a slicer, or import it into the printer's web UI."
                 ),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -3250,7 +3250,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "params": params,
                 "reference": (params.get("reference") or {}).get("file"),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -3266,7 +3266,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "writes_performed": False,
                 "assets": AssetStore(rt.workspace).list(limit=int(limit)),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     @server.tool(
@@ -3289,14 +3289,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "writes_performed": False,
                 "job": job_payload(job),
             }
-        except XPrintError as exc:
+        except Print3DError as exc:
             return tool_error(exc)
 
     return server
 
 
 def _bearer_token(loaded: LoadedConfig, secrets: Secrets) -> str | None:
-    env_name = loaded.config.server.token_env or "XPRINT_TOKEN"
+    env_name = loaded.config.server.token_env or "PRINT3D_TOKEN"
     token = os.environ.get(env_name, "").strip()
     if token:
         return token
@@ -3326,7 +3326,7 @@ class BearerAuth:
                     "error": {
                         "code": "unauthorized",
                         "message": "missing or invalid bearer token",
-                        "hint": "Send Authorization: Bearer <token> using the value from XPRINT_TOKEN or secrets.json server.token.",
+                        "hint": "Send Authorization: Bearer <token> using the value from PRINT3D_TOKEN or secrets.json server.token.",
                         "details": {},
                     },
                 }
@@ -3337,7 +3337,7 @@ class BearerAuth:
                     "status": 401,
                     "headers": [
                         (b"content-type", b"application/json"),
-                        (b"www-authenticate", b'Bearer realm="xprint"'),
+                        (b"www-authenticate", b'Bearer realm="3dprint"'),
                         (b"content-length", str(len(body)).encode()),
                     ],
                 }
@@ -3365,7 +3365,7 @@ def serve(
     if transport not in {"http", "streamable-http"}:
         raise ConfigError(
             f"unknown transport {transport!r}",
-            hint="Use `xprint serve --stdio` or `xprint serve --http`.",
+            hint="Use `3dprint serve --stdio` or `3dprint serve --http`.",
         )
 
     cfg = runtime.loaded.config.server
@@ -3377,8 +3377,8 @@ def serve(
         raise ConfigError(
             f"refusing to bind {bind_host} without a bearer token",
             hint=(
-                "Set XPRINT_TOKEN (or server.token in secrets.json) before exposing "
-                "XPrint beyond loopback."
+                "Set PRINT3D_TOKEN (or server.token in secrets.json) before exposing "
+                "3DPrint beyond loopback."
             ),
         )
 

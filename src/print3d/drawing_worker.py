@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Project a STEP file into a third-angle SVG + DXF sheet (child process).
 
-Invoked by :func:`xprint.drawing.run_drawing` as::
+Invoked by :func:`print3d.drawing.run_drawing` as::
 
     python -I -B drawing_worker.py model.step outdir --views front,top,right,iso
         --scale 1.0 [--no-hidden] [--no-labels] [--cpu-seconds 65]
 
-Like ``cad_worker.py`` this is a single file importing nothing from xprint: it
+Like ``cad_worker.py`` this is a single file importing nothing from print3d: it
 runs in a scrubbed interpreter with rlimits, reads one STEP file and writes
 ``result.json``, ``drawing.svg`` and ``drawing.dxf`` into *outdir*.
 

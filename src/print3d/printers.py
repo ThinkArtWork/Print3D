@@ -5,7 +5,7 @@ Implemented adapters:
 * ``moonraker`` - Klipper's documented HTTP API.
 * ``octoprint`` - OctoPrint's documented REST API.
 * ``bambu_lan``  - Bambu Lab LAN mode (MQTT/TLS + implicit FTPS + 3MF), see
-  :mod:`xprint.bambu`.  The protocol is community documented and unit tested
+  :mod:`print3d.bambu`.  The protocol is community documented and unit tested
   here, but not verified against real hardware yet.
 * ``prusalink`` - Prusa's local HTTP API (HTTP Digest auth, v1 + legacy fallback).
 * ``http``      - declarative adapter: endpoints, field paths and state names
@@ -866,7 +866,7 @@ def build_printer(
                 f"Printer {printer.id} has no LAN access code",
                 hint=(
                     "Store the printer's LAN access code in secrets.json under "
-                    f"providers.{printer.id}, or set {printer.access_code_env or 'XPRINT_<ID>_ACCESS_CODE'}."
+                    f"providers.{printer.id}, or set {printer.access_code_env or 'PRINT3D_<ID>_ACCESS_CODE'}."
                 ),
             )
         return BambuLanPrinter(

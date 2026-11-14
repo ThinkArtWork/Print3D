@@ -7,10 +7,10 @@ import zipfile
 
 import pytest
 
-from xprint.bambu import BambuLanPrinter, build_3mf, parse_host
-from xprint.config import PrinterSettings, Secrets
-from xprint.errors import AdapterUnavailable, InvalidArgument
-from xprint.printers import build_printer
+from print3d.bambu import BambuLanPrinter, build_3mf, parse_host
+from print3d.config import PrinterSettings, Secrets
+from print3d.errors import AdapterUnavailable, InvalidArgument
+from print3d.printers import build_printer
 
 GCODE = b"; test\nG1 X1 Y1 E0.1\n"
 
@@ -173,7 +173,7 @@ def test_build_printer_requires_access_code():
 
 def test_build_printer_unknown_adapter():
     settings = PrinterSettings(id="x1", adapter="vendor_cloud", base_url="http://x")
-    from xprint.errors import AdapterUnknown
+    from print3d.errors import AdapterUnknown
 
     with pytest.raises(AdapterUnknown):
         build_printer(settings, secrets=Secrets({}))

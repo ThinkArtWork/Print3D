@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from xprint.errors import InvalidArgument, NotFound, PathOutsideWorkspace
-from xprint.workspace import Workspace, atomic_write_text
+from print3d.errors import InvalidArgument, NotFound, PathOutsideWorkspace
+from print3d.workspace import Workspace, atomic_write_text
 
 
 def test_layout_created(tmp_path: Path) -> None:

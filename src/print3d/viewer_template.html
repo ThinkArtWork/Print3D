@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>__TITLE__ — XPrint 3D</title>
+<title>__TITLE__ — 3DPrint 3D</title>
 <style>
   :root {
     --bg-0: #0d1014;
@@ -167,7 +167,7 @@
 <div id="stage">
   <canvas id="c"></canvas>
   <header class="hud top">
-    <div class="brand">XPrint</div>
+    <div class="brand">3DPrint</div>
     <div class="who">
       <h1>__TITLE__</h1>
       <div class="sub" id="sub">__SUBTITLE__</div>
@@ -495,7 +495,7 @@
       const count = Math.floor(currentPos.length / 9);
       const buffer = new ArrayBuffer(84 + count * 50);
       const view = new DataView(buffer);
-      const header = "XPrint " + (META.name || "model") + " " + REVS[current].revision;
+      const header = "3DPrint " + (META.name || "model") + " " + REVS[current].revision;
       for (let i = 0; i < 80; i += 1) {
         view.setUint8(i, i < header.length ? header.charCodeAt(i) : 0);
       }

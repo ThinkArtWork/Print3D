@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from xprint.assets import AssetStore, new_asset_id, validate_asset_id, validate_name
-from xprint.errors import InvalidArgument, NotFound
+from print3d.assets import AssetStore, new_asset_id, validate_asset_id, validate_name
+from print3d.errors import InvalidArgument, NotFound
 
 
 def test_asset_id_and_name_validation() -> None:

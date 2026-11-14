@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from xprint.errors import (
+from print3d.errors import (
     ConfigError,
     InvalidArgument,
     JobNotFound,
     PathOutsideWorkspace,
-    XPrintError,
+    Print3DError,
     error_payload,
     fail,
     ok,
@@ -39,8 +39,8 @@ def test_helpers() -> None:
 
 def test_subclass_codes() -> None:
     assert JobNotFound("x").to_dict()["code"] == "job_not_found"
-    assert XPrintError("x").to_dict()["code"] == "internal_error"
+    assert Print3DError("x").to_dict()["code"] == "internal_error"
 
 
 def test_details_default_to_empty_dict() -> None:
-    assert XPrintError("x").to_dict()["details"] == {}
+    assert Print3DError("x").to_dict()["details"] == {}

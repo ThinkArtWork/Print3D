@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from xprint.errors import AdapterUnknown, InvalidArgument
-from xprint.registry import Registry, builtin_registry
+from print3d.errors import AdapterUnknown, InvalidArgument
+from print3d.registry import Registry, builtin_registry
 
 
 def test_register_get_create() -> None:

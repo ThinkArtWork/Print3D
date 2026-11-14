@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
-from xprint.capabilities import build_capabilities, build_system_status
-from xprint.config import load_all
-from xprint.jobs import JobStore
-from xprint.registry import builtin_registry
+from print3d.capabilities import build_capabilities, build_system_status
+from print3d.config import load_all
+from print3d.jobs import JobStore
+from print3d.registry import builtin_registry
 
 
 def test_capabilities_shape(workspace) -> None:

@@ -8,9 +8,9 @@ import pytest
 import trimesh
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from xprint.blender import BlenderResult
-from xprint.mesh_fit import fit_script
-from xprint.server import Runtime, build_server
+from print3d.blender import BlenderResult
+from print3d.mesh_fit import fit_script
+from print3d.server import Runtime, build_server
 
 
 def _call(runtime, tool, args):
@@ -50,7 +50,7 @@ def _fake_blender(monkeypatch: pytest.MonkeyPatch, workspace) -> None:
             artifacts={"model.stl": str(model)},
         )
 
-    monkeypatch.setattr("xprint.server.run_blender", fake_run)
+    monkeypatch.setattr("print3d.server.run_blender", fake_run)
 
 
 def test_fit_script_contains_exact_envelope_and_budget(tmp_path: Path) -> None:

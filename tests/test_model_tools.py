@@ -10,8 +10,8 @@ from pathlib import Path
 from mcp.shared.memory import create_connected_server_and_client_session
 from tests.stl_helpers import binary_stl_bytes
 
-from xprint.assets import AssetStore
-from xprint.server import Runtime, build_server
+from print3d.assets import AssetStore
+from print3d.server import Runtime, build_server
 
 GOOD = """\
 from build123d import *
@@ -108,7 +108,7 @@ def test_model_write_needs_a_name_for_a_new_asset(workspace) -> None:
 
 
 def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) -> None:
-    from xprint.cad import RunResult
+    from print3d.cad import RunResult
 
     def fake_run(script, *, workdir=None, input_step=None, timeout_s=0, python=None):
         out = Path(workdir)
@@ -122,7 +122,7 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
             artifacts={"stl": str(out / "model.stl"), "step": str(out / "model.step")},
         )
 
-    monkeypatch.setattr("xprint.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.server.run_script", fake_run)
     runtime = _runtime(workspace)
     written = call(
         runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
@@ -171,7 +171,7 @@ def test_model_build_requires_exact_confirm(workspace) -> None:
 
 
 def test_model_build_reports_a_failed_run(workspace, monkeypatch) -> None:
-    from xprint.cad import RunResult
+    from print3d.cad import RunResult
 
     def fake_run(script, *, workdir=None, input_step=None, timeout_s=0, python=None):
         return RunResult(
@@ -181,7 +181,7 @@ def test_model_build_reports_a_failed_run(workspace, monkeypatch) -> None:
             stderr="Traceback ...\nValueError: radius must be positive",
         )
 
-    monkeypatch.setattr("xprint.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.server.run_script", fake_run)
     runtime = _runtime(workspace)
     written = call(
         runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
@@ -216,7 +216,7 @@ STEP_STUB = (
 def test_model_build_stores_and_exposes_a_step_input(
     workspace, monkeypatch, tmp_path: Path
 ) -> None:
-    from xprint.cad import RunResult
+    from print3d.cad import RunResult
 
     seen: dict[str, Path | None] = {"input_step": None}
 
@@ -233,7 +233,7 @@ def test_model_build_stores_and_exposes_a_step_input(
             artifacts={"stl": str(out / "model.stl"), "step": str(out / "model.step")},
         )
 
-    monkeypatch.setattr("xprint.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.server.run_script", fake_run)
     source = tmp_path / "bracket.step"
     source.write_text(STEP_STUB, encoding="utf-8")
     runtime = _runtime(workspace)
@@ -302,8 +302,8 @@ def test_model_build_rejects_bad_step_inputs(workspace, tmp_path: Path) -> None:
 
 
 def test_model_drawing_records_a_sheet(workspace, monkeypatch, tmp_path: Path) -> None:
-    from xprint.cad import RunResult
-    from xprint.drawing import DrawingResult
+    from print3d.cad import RunResult
+    from print3d.drawing import DrawingResult
 
     def fake_run(script, *, workdir=None, input_step=None, timeout_s=0, python=None):
         out = Path(workdir)
@@ -340,8 +340,8 @@ def test_model_drawing_records_a_sheet(workspace, monkeypatch, tmp_path: Path) -
             files={"drawing.svg": str(svg), "drawing.dxf": str(dxf)},
         )
 
-    monkeypatch.setattr("xprint.server.run_script", fake_run)
-    monkeypatch.setattr("xprint.server.run_drawing", fake_drawing)
+    monkeypatch.setattr("print3d.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.server.run_drawing", fake_drawing)
     runtime = _runtime(workspace)
     written = call(
         runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
@@ -487,7 +487,7 @@ def test_model_preview_returns_an_image(workspace, monkeypatch) -> None:
     (revision.parent / "model.stl").write_bytes(b"binary-stl-placeholder")
 
     png = _png_bytes()
-    monkeypatch.setattr("xprint.server.render_views", lambda *a, **k: png)
+    monkeypatch.setattr("print3d.server.render_views", lambda *a, **k: png)
 
     async def scenario():
         async with create_connected_server_and_client_session(build_server(runtime)) as client:
@@ -646,7 +646,7 @@ def test_generate_local_runs_a_provider_and_creates_an_asset(workspace, tmp_path
         "from pathlib import Path\n"
         f"sys.path.insert(0, {str(Path.cwd() / 'tests')!r})\n"
         "from stl_helpers import binary_stl_bytes\n"
-        "Path(os.environ['XPRINT_LOCAL_OUT'], 'mesh.stl').write_bytes(binary_stl_bytes())\n",
+        "Path(os.environ['PRINT3D_LOCAL_OUT'], 'mesh.stl').write_bytes(binary_stl_bytes())\n",
         encoding="utf-8",
     )
     provider.chmod(0o755)
@@ -712,7 +712,7 @@ def test_generate_local_requires_prompt_or_image(workspace) -> None:
 def test_generate_cloud_creates_an_asset(workspace, monkeypatch) -> None:
     from tests.stl_helpers import binary_stl_bytes
 
-    from xprint.cloud import CloudTask
+    from print3d.cloud import CloudTask
 
     class FakeCloud:
         def submit(self, *, prompt=None, image=None):
@@ -731,9 +731,9 @@ def test_generate_cloud_creates_an_asset(workspace, monkeypatch) -> None:
         def close(self):
             pass
 
-    monkeypatch.setattr("xprint.server.build_provider", lambda *a, **k: FakeCloud())
+    monkeypatch.setattr("print3d.server.build_provider", lambda *a, **k: FakeCloud())
     monkeypatch.setattr(
-        "xprint.server.download_model",
+        "print3d.server.download_model",
         lambda url, **k: (binary_stl_bytes(), ".stl"),
     )
 
@@ -810,7 +810,7 @@ def test_generate_cloud_rejects_confirm_and_unknown_provider(workspace, monkeypa
                     "cloud": {
                         "hunyuan": {
                             "adapter": "hunyuan_openai",
-                            "api_key_env": "XPRINT_TEST_MISSING_KEY",
+                            "api_key_env": "PRINT3D_TEST_MISSING_KEY",
                         }
                     }
                 }
@@ -818,7 +818,7 @@ def test_generate_cloud_rejects_confirm_and_unknown_provider(workspace, monkeypa
         ),
         encoding="utf-8",
     )
-    monkeypatch.delenv("XPRINT_TEST_MISSING_KEY", raising=False)
+    monkeypatch.delenv("PRINT3D_TEST_MISSING_KEY", raising=False)
     runtime = _runtime(workspace)
     payload = call(
         runtime,
@@ -827,14 +827,14 @@ def test_generate_cloud_rejects_confirm_and_unknown_provider(workspace, monkeypa
     )
     assert payload["ok"] is False
     assert payload["error"]["code"] == "adapter_unavailable"
-    assert "XPRINT_TEST_MISSING_KEY" in (payload["error"]["hint"] or "")
+    assert "PRINT3D_TEST_MISSING_KEY" in (payload["error"]["hint"] or "")
 
 
 def test_generate_cloud_can_fit_generated_mesh_to_size(workspace, monkeypatch) -> None:
     from tests.stl_helpers import binary_stl_bytes
 
-    from xprint.blender import BlenderResult
-    from xprint.cloud import CloudTask
+    from print3d.blender import BlenderResult
+    from print3d.cloud import CloudTask
 
     class FakeCloud:
         def submit(self, *, prompt=None, image=None):
@@ -875,12 +875,12 @@ def test_generate_cloud_can_fit_generated_mesh_to_size(workspace, monkeypatch) -
             artifacts={"model.stl": str(model)},
         )
 
-    monkeypatch.setattr("xprint.server.build_provider", lambda *a, **k: FakeCloud())
+    monkeypatch.setattr("print3d.server.build_provider", lambda *a, **k: FakeCloud())
     monkeypatch.setattr(
-        "xprint.server.download_model",
+        "print3d.server.download_model",
         lambda url, **k: (binary_stl_bytes(), ".stl"),
     )
-    monkeypatch.setattr("xprint.server.run_blender", fake_blender)
+    monkeypatch.setattr("print3d.server.run_blender", fake_blender)
 
     workspace.config_path.write_text(
         json.dumps(

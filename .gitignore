@@ -18,6 +18,8 @@ dist/
 build/
 
 # runtime workspace (if pointed inside the repo)
+.3dprint/
+# legacy workspace from before the 3DPrint rename; keep ignoring the old data
 .xprint/
 jobs/
 assets/
@@ -31,3 +33,9 @@ logs/
 
 # OrcaSlicer writes this log into the working directory
 00000.log
+
+# demo / experiment artifacts (generated, not sources)
+neo*
+tourbox-*
+00000.log
+demo-plate-*.gcode

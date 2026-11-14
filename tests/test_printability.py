@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from xprint.printability import (
+from print3d.printability import (
     candidate_orientations,
     evaluate_orientation,
     mesh_metrics,

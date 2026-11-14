@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from xprint.errors import InvalidArgument, JobNotFound, JobStateError
-from xprint.jobs import JobStore, new_job_id, sha256_file, validate_job_id
+from print3d.errors import InvalidArgument, JobNotFound, JobStateError
+from print3d.jobs import JobStore, new_job_id, sha256_file, validate_job_id
 
 
 def test_job_id_shape() -> None:

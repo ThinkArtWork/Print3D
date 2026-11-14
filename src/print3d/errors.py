@@ -2,11 +2,11 @@
 
 Every failure surfaced to an MCP host carries a machine-readable ``code``, a
 human-readable ``message``, an actionable ``hint`` (how to fix it) and optional
-``details``.  Tool handlers convert :class:`XPrintError` into a normal tool
+``details``.  Tool handlers convert :class:`Print3DError` into a normal tool
 result with ``ok: false`` so hosts can show the hint instead of a stack trace.
 
 Security note: never put API keys into ``message``/``details``.  Use
-:func:`xprint.config.redact` on any provider payload before including it.
+:func:`print3d.config.redact` on any provider payload before including it.
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ class ErrorCode(StrEnum):
     INTERNAL = "internal_error"
 
 
-class XPrintError(Exception):
-    """Base class for all expected XPrint failures."""
+class Print3DError(Exception):
+    """Base class for all expected 3DPrint failures."""
 
     code: ErrorCode = ErrorCode.INTERNAL
     default_hint: str | None = None
@@ -71,21 +71,21 @@ class XPrintError(Exception):
         return text
 
 
-class ConfigError(XPrintError):
+class ConfigError(Print3DError):
     code = ErrorCode.CONFIG_INVALID
-    default_hint = "Run `xprint init` to write a default config, or fix config.json."
+    default_hint = "Run `3dprint init` to write a default config, or fix config.json."
 
 
 class ConfigMissing(ConfigError):
     code = ErrorCode.CONFIG_MISSING
 
 
-class SecretsInsecure(XPrintError):
+class SecretsInsecure(Print3DError):
     code = ErrorCode.SECRETS_INSECURE
-    default_hint = "chmod 600 ~/.xprint/secrets.json"
+    default_hint = "chmod 600 ~/.3dprint/secrets.json"
 
 
-class PathError(XPrintError):
+class PathError(Print3DError):
     code = ErrorCode.PATH_INVALID
     default_hint = "Pass a path relative to the workspace, or an absolute path inside it."
 
@@ -94,24 +94,24 @@ class PathOutsideWorkspace(PathError):
     code = ErrorCode.PATH_OUTSIDE_WORKSPACE
 
 
-class NotFound(XPrintError):
+class NotFound(Print3DError):
     code = ErrorCode.NOT_FOUND
 
 
-class InvalidArgument(XPrintError):
+class InvalidArgument(Print3DError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
-class ConfirmationMismatch(XPrintError):
+class ConfirmationMismatch(Print3DError):
     code = ErrorCode.CONFIRMATION_MISMATCH
     default_hint = "Copy the exact confirm string returned by the plan/preflight call."
 
 
-class AdapterUnknown(XPrintError):
+class AdapterUnknown(Print3DError):
     code = ErrorCode.ADAPTER_UNKNOWN
 
 
-class AdapterUnavailable(XPrintError):
+class AdapterUnavailable(Print3DError):
     code = ErrorCode.ADAPTER_UNAVAILABLE
 
 
@@ -119,11 +119,11 @@ class JobNotFound(NotFound):
     code = ErrorCode.JOB_NOT_FOUND
 
 
-class JobStateError(XPrintError):
+class JobStateError(Print3DError):
     code = ErrorCode.JOB_INVALID_STATE
 
 
-class NotImplementedYet(XPrintError):
+class NotImplementedYet(Print3DError):
     code = ErrorCode.NOT_IMPLEMENTED
 
 
@@ -138,12 +138,12 @@ def _jsonable(value: Any) -> Any:
 
 def error_payload(exc: BaseException) -> dict[str, Any]:
     """Convert any exception into the public error envelope."""
-    if isinstance(exc, XPrintError):
+    if isinstance(exc, Print3DError):
         return exc.to_dict()
     return {
         "code": ErrorCode.INTERNAL.value,
         "message": str(exc) or exc.__class__.__name__,
-        "hint": "Re-run with `xprint --verbose` for a traceback.",
+        "hint": "Re-run with `3dprint --verbose` for a traceback.",
     }
 
 

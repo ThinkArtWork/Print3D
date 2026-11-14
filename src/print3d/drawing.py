@@ -1,6 +1,6 @@
 """Render a built STEP file as a 2D drawing sheet, in a child process.
 
-Same security posture as :mod:`xprint.cad`: the worker is a separate interpreter
+Same security posture as :mod:`print3d.cad`: the worker is a separate interpreter
 with a scrubbed environment, a CPU/wall-clock budget and an output cap, and only
 its JSON is read back.  The input is always a STEP file a build already stored in
 the asset revision, so the sheet provably matches the model it documents.

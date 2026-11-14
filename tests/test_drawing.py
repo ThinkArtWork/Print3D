@@ -1,4 +1,4 @@
-"""Tests for the STEP to SVG/DXF drawing renderer (``xprint.drawing``)."""
+"""Tests for the STEP to SVG/DXF drawing renderer (``print3d.drawing``)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from xprint.drawing import DEFAULT_VIEWS, parse_views, run_drawing
-from xprint.errors import InvalidArgument, NotFound
+from print3d.drawing import DEFAULT_VIEWS, parse_views, run_drawing
+from print3d.errors import InvalidArgument, NotFound
 
 needs_build123d = pytest.mark.skipif(
     importlib.util.find_spec("build123d") is None, reason="build123d not installed"

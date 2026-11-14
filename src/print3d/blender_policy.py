@@ -2,7 +2,7 @@
 
 Blender's Python is a full interpreter: the review below is defence in depth,
 not a sandbox.  The real boundary is the background Blender process plus the
-resource limits and environment scrubbing in :mod:`xprint.blender`.
+resource limits and environment scrubbing in :mod:`print3d.blender`.
 """
 
 from __future__ import annotations

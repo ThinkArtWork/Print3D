@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from xprint.config import (
+from print3d.config import (
     Config,
     Secrets,
     default_config_dict,
@@ -15,7 +15,7 @@ from xprint.config import (
     redact,
     write_config,
 )
-from xprint.errors import ConfigError
+from print3d.errors import ConfigError
 
 
 def test_defaults_when_missing(workspace) -> None:
@@ -36,8 +36,8 @@ def test_config_file_roundtrip(workspace) -> None:
 
 
 def test_env_overrides(workspace, monkeypatch) -> None:
-    monkeypatch.setenv("XPRINT_HOST", "0.0.0.0")
-    monkeypatch.setenv("XPRINT_PORT", "7777")
+    monkeypatch.setenv("PRINT3D_HOST", "0.0.0.0")
+    monkeypatch.setenv("PRINT3D_PORT", "7777")
     loaded = load_config()
     assert loaded.config.server.host == "0.0.0.0"
     assert loaded.config.server.port == 7777
@@ -45,7 +45,7 @@ def test_env_overrides(workspace, monkeypatch) -> None:
 
 def test_env_workspace_overrides(tmp_path, monkeypatch) -> None:
     other = tmp_path / "other"
-    monkeypatch.setenv("XPRINT_WORKSPACE", str(other))
+    monkeypatch.setenv("PRINT3D_WORKSPACE", str(other))
     loaded = load_config()
     assert loaded.config.workspace == str(other)
     assert other.is_dir()  # Workspace creation is a side effect of path resolution
@@ -106,7 +106,7 @@ def test_secrets_env_precedence(monkeypatch) -> None:
     secrets = Secrets({"providers": {"tripo": "from-file"}})
     assert secrets.provider_key("tripo") == "from-file"
     assert secrets.key_source("tripo") == "secrets"
-    monkeypatch.setenv("XPRINT_TRIPO_API_KEY", "from-env")
+    monkeypatch.setenv("PRINT3D_TRIPO_API_KEY", "from-env")
     assert secrets.provider_key("tripo") == "from-env"
     assert secrets.key_source("tripo") == "env"
     assert secrets.has_key("tripo") is True

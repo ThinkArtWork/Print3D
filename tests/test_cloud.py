@@ -10,7 +10,7 @@ import pytest
 import respx
 from tests.stl_helpers import binary_stl_bytes
 
-from xprint.cloud import (
+from print3d.cloud import (
     AdapterUnknown,
     CloudTask,
     HunyuanCloud,
@@ -20,8 +20,8 @@ from xprint.cloud import (
     download_model,
     to_stl,
 )
-from xprint.errors import AdapterUnavailable, InvalidArgument
-from xprint.preview import load_stl
+from print3d.errors import AdapterUnavailable, InvalidArgument
+from print3d.preview import load_stl
 
 TRIPO = "https://openapi.tripo3d.com/v3"
 HUNYUAN_API = "https://api.ai3d.cloud.tencent.com"

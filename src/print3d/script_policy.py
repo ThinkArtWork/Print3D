@@ -1,6 +1,6 @@
-"""Static checks for model scripts before XPrint stores or runs them.
+"""Static checks for model scripts before 3DPrint stores or runs them.
 
-An LLM-written ``build123d`` script is still untrusted code.  XPrint does not
+An LLM-written ``build123d`` script is still untrusted code.  3DPrint does not
 execute it in-process, but it does store it and may hand it to the CAD backend,
 so the cheap static gate runs first:
 

@@ -1,4 +1,4 @@
-"""Tests for the CAD subprocess executor (``xprint.cad``)."""
+"""Tests for the CAD subprocess executor (``print3d.cad``)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from xprint.cad import clean_env, run_script
-from xprint.errors import InvalidArgument, NotFound
+from print3d.cad import clean_env, run_script
+from print3d.errors import InvalidArgument, NotFound
 
 MODEL = "from build123d import *\n\ndef build_part():\n    return Box(1, 1, 1)\n"
 
@@ -47,7 +47,7 @@ def test_clean_env_drops_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert "MY_PASSWORD" not in env
     assert "PYTHONPATH" not in env
     assert env["KEEP_ME"] == "yes"
-    assert env["XPRINT_SANDBOX"] == "1"
+    assert env["PRINT3D_SANDBOX"] == "1"
 
 
 def test_result_is_read_back(tmp_path: Path) -> None:

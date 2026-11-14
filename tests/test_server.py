@@ -10,9 +10,9 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from xprint import __version__
-from xprint.server import BearerAuth, Runtime, _bearer_token, build_server
-from xprint.workspace import Workspace
+from print3d import __version__
+from print3d.server import BearerAuth, Runtime, _bearer_token, build_server
+from print3d.workspace import Workspace
 
 
 def run(coro):
@@ -31,7 +31,7 @@ def test_handshake_and_tools_list() -> None:
             return info, listing
 
     info, listing = run(scenario())
-    assert info.serverInfo.name == "xprint"
+    assert info.serverInfo.name == "3dprint"
     assert info.serverInfo.version == __version__
     assert sorted(t.name for t in listing.tools) == [
         "asset_export",
@@ -142,5 +142,5 @@ def test_bearer_auth_accepts_token() -> None:
 def test_bearer_token_resolution(monkeypatch) -> None:
     runtime = Runtime.create(workspace=Workspace())
     assert _bearer_token(runtime.loaded, runtime.secrets) is None
-    monkeypatch.setenv("XPRINT_TOKEN", "abc")
+    monkeypatch.setenv("PRINT3D_TOKEN", "abc")
     assert _bearer_token(runtime.loaded, runtime.secrets) == "abc"

@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from tests.stl_helpers import binary_stl_bytes
 
-from xprint.blender import find_blender, run_blender
-from xprint.blender_policy import check_blender_script
-from xprint.errors import InvalidArgument
+from print3d.blender import find_blender, run_blender
+from print3d.blender_policy import check_blender_script
+from print3d.errors import InvalidArgument
 
 CUBE_SCRIPT = """\
 import bpy
@@ -68,7 +68,7 @@ def test_run_with_fake_blender_exports_and_checks(tmp_path: Path) -> None:
         f"sys.path.insert(0, {str(Path.cwd() / 'tests')!r})\n"
         "from stl_helpers import binary_stl_bytes\n"
         "from pathlib import Path\n"
-        "Path(os.environ['XPRINT_BLENDER_OUT'], 'model.stl').write_bytes(binary_stl_bytes())\n"
+        "Path(os.environ['PRINT3D_BLENDER_OUT'], 'model.stl').write_bytes(binary_stl_bytes())\n"
         "print('exported')\n",
     )
     result = run_blender(CUBE_SCRIPT, workdir=tmp_path / "run", blender_path=str(fake))

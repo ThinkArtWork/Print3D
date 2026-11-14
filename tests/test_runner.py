@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import time
 
-from xprint.errors import XPrintError
-from xprint.jobs import JobStore
-from xprint.runner import JobRunner
+from print3d.errors import Print3DError
+from print3d.jobs import JobStore
+from print3d.runner import JobRunner
 
 
 def test_runner_completes_and_stores_result(workspace) -> None:
@@ -27,7 +27,7 @@ def test_runner_records_errors(workspace) -> None:
     runner = JobRunner(store, workers=1)
 
     def explode(job_id: str) -> dict:
-        raise XPrintError("provider exploded", hint="try another provider")
+        raise Print3DError("provider exploded", hint="try another provider")
 
     try:
         job = runner.submit("test", explode)

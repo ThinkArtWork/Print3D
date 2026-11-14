@@ -1,6 +1,6 @@
 """Workspace layout and path sandbox.
 
-``~/.xprint`` (or ``--workspace``) is the only directory XPrint is allowed to
+``~/.3dprint`` (or ``--workspace``) is the only directory 3DPrint is allowed to
 read model inputs from or write artifacts to.  Every user-supplied path goes
 through :meth:`Workspace.safe_path`, which resolves symlinks *before* checking
 containment, so ``assets/link -> /etc`` cannot escape.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .errors import InvalidArgument, NotFound, PathOutsideWorkspace
 
-DEFAULT_WORKSPACE = "~/.xprint"
+DEFAULT_WORKSPACE = "~/.3dprint"
 
 #: Directories created inside a workspace on first use.
 SUBDIRS = ("assets", "references", "jobs", "slices", "profiles", "cache", "logs")
@@ -49,7 +49,7 @@ class Workspace:
 
     def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
         raw = Path(
-            str(root or os.environ.get("XPRINT_WORKSPACE") or DEFAULT_WORKSPACE)
+            str(root or os.environ.get("PRINT3D_WORKSPACE") or DEFAULT_WORKSPACE)
         ).expanduser()
         self.root = raw.resolve()
         self._ensure_layout()

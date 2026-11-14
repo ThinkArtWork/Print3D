@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from xprint.errors import ConfigError, InvalidArgument, NotFound
-from xprint.local_mesh import build_command, run_local
+from print3d.errors import ConfigError, InvalidArgument, NotFound
+from print3d.local_mesh import build_command, run_local
 
 
 def _provider(tmp_path: Path, body: str) -> Path:
@@ -64,7 +64,7 @@ def test_run_local_produces_mesh(tmp_path: Path) -> None:
         "from pathlib import Path\n"
         f"sys.path.insert(0, {str(Path.cwd() / 'tests')!r})\n"
         "from stl_helpers import binary_stl_bytes\n"
-        "Path(os.environ['XPRINT_LOCAL_OUT'], 'mesh.stl').write_bytes(binary_stl_bytes())\n"
+        "Path(os.environ['PRINT3D_LOCAL_OUT'], 'mesh.stl').write_bytes(binary_stl_bytes())\n"
         "print('done')\n",
     )
     result = run_local(
@@ -88,7 +88,7 @@ def test_run_local_discovers_mesh_from_stdout(tmp_path: Path) -> None:
         "from pathlib import Path\n"
         f"sys.path.insert(0, {str(Path.cwd() / 'tests')!r})\n"
         "from stl_helpers import binary_stl_bytes\n"
-        "out = Path(os.environ['XPRINT_LOCAL_OUT'])\n"
+        "out = Path(os.environ['PRINT3D_LOCAL_OUT'])\n"
         "mesh = out / 'result.stl'\n"
         "mesh.write_bytes(binary_stl_bytes())\n"
         "print(json.dumps({'mesh': str(mesh)}))\n",

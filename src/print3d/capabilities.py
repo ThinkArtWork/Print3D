@@ -139,7 +139,7 @@ def probe_cad(cfg: LoadedConfig) -> dict[str, Any]:
         "hint": None
         if cad_cli
         else "Install text-to-cad in its own environment: `pip install cad-server` "
-        "(see docs/ASSETS.md); XPrint only calls it as an external process.",
+        "(see docs/ASSETS.md); 3DPrint only calls it as an external process.",
     }
 
 

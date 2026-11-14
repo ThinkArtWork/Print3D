@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from tests.stl_helpers import TETRA, write_stl
 
-from xprint.assets import AssetStore
-from xprint.viewer import (
+from print3d.assets import AssetStore
+from print3d.viewer import (
     MAX_VIEW_TRIANGLES,
     VIEWER_FILE,
     viewer_alias_name,
@@ -48,7 +48,7 @@ def test_viewer_rejects_empty_and_oversized_meshes(monkeypatch) -> None:
     with pytest.raises(ValueError, match="no triangles"):
         viewer_html(np.zeros((0, 3, 3)), title="x", subtitle="y", revision="v001")
 
-    monkeypatch.setattr("xprint.viewer.MAX_VIEW_TRIANGLES", 2)
+    monkeypatch.setattr("print3d.viewer.MAX_VIEW_TRIANGLES", 2)
     with pytest.raises(ValueError, match="supports at most"):
         viewer_html(_triangles(), title="x", subtitle="y", revision="v001")
 
@@ -115,7 +115,7 @@ def test_max_is_high_enough_for_normal_parts() -> None:
 
 
 def test_collection_viewer_embeds_every_revision_in_one_file(tmp_path) -> None:
-    from xprint.viewer import collection_html, entry_from_stl, write_collection_viewer
+    from print3d.viewer import collection_html, entry_from_stl, write_collection_viewer
 
     first = tmp_path / "v001.stl"
     second = tmp_path / "v002.stl"
@@ -163,7 +163,7 @@ def test_viewer_alias_name_is_readable_and_safe() -> None:
 
 
 def test_legacy_per_revision_viewer_redirects_to_the_asset_viewer(tmp_path) -> None:
-    from xprint.viewer import write_legacy_redirect
+    from print3d.viewer import write_legacy_redirect
 
     target = write_legacy_redirect(tmp_path / "v001", title="plate")
     text = target.read_text(encoding="utf-8")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from xprint.script_policy import check_script, errors, summarise
+from print3d.script_policy import check_script, errors, summarise
 
 GOOD = """\
 from build123d import *

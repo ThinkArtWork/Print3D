@@ -13,7 +13,7 @@ TETRA = (
 
 
 def binary_stl_bytes() -> bytes:
-    payload = bytearray(b"xprint test mesh".ljust(80, b"\0"))
+    payload = bytearray(b"3dprint test mesh".ljust(80, b"\0"))
     payload += struct.pack("<I", len(TETRA))
     for a, b, c in TETRA:
         payload += struct.pack("<3f", 0.0, 0.0, 0.0)

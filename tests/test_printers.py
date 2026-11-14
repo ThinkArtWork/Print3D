@@ -8,9 +8,9 @@ import httpx
 import pytest
 import respx
 
-from xprint.config import PrinterSettings, Secrets
-from xprint.errors import AdapterUnavailable, AdapterUnknown, InvalidArgument
-from xprint.printers import (
+from print3d.config import PrinterSettings, Secrets
+from print3d.errors import AdapterUnavailable, AdapterUnknown, InvalidArgument
+from print3d.printers import (
     MoonrakerPrinter,
     OctoPrintPrinter,
     build_printer,

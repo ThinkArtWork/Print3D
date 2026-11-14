@@ -1,6 +1,6 @@
 """Adapter for user-installed local 3D generators.
 
-XPrint does not bundle model weights.  A local provider is a command that
+3DPrint does not bundle model weights.  A local provider is a command that
 follows a small contract:
 
 * it receives at least one of ``prompt`` / ``image`` (via the ``{prompt}`` and
@@ -10,7 +10,7 @@ follows a small contract:
 * it exits non-zero on failure.
 
 Anything that can do that — TripoSR, Hunyuan3D, Shap-E, a ComfyUI workflow, a
-private service wrapper — becomes a provider without changing XPrint.
+private service wrapper — becomes a provider without changing 3DPrint.
 """
 
 from __future__ import annotations
@@ -194,8 +194,8 @@ def run_local(
     extra_env = entry.get("env") or {}
     if isinstance(extra_env, dict):
         env.update({str(key): str(value) for key, value in extra_env.items()})
-    env["XPRINT_LOCAL_OUT"] = str(directory)
-    env["XPRINT_LOCAL_PROVIDER"] = provider_id
+    env["PRINT3D_LOCAL_OUT"] = str(directory)
+    env["PRINT3D_LOCAL_PROVIDER"] = provider_id
 
     started = time.monotonic()
     try:

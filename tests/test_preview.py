@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from xprint.preview import DEFAULT_VIEWS, load_stl, render_views
+from print3d.preview import DEFAULT_VIEWS, load_stl, render_views
 
 CUBE = [
     ((0, 0, 0), (20, 0, 0), (20, 20, 0)),
@@ -41,7 +41,7 @@ def ascii_stl(triangles) -> bytes:
 
 
 def binary_stl(triangles) -> bytes:
-    header = b"xprint test".ljust(80, b"\0")
+    header = b"3dprint test".ljust(80, b"\0")
     body = struct.pack("<I", len(triangles))
     for a, b, c in triangles:
         body += struct.pack("<3f", 0, 0, 0)

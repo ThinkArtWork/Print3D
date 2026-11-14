@@ -5,9 +5,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from xprint.config import PrinterSettings, Secrets
-from xprint.errors import AdapterUnavailable, InvalidArgument
-from xprint.printers import HttpPrinter, PrusaLinkPrinter, build_printer
+from print3d.config import PrinterSettings, Secrets
+from print3d.errors import AdapterUnavailable, InvalidArgument
+from print3d.printers import HttpPrinter, PrusaLinkPrinter, build_printer
 
 
 def _digest_handler(payload: dict, *, seen: list[httpx.Request] | None = None):

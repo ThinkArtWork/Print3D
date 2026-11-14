@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "xprint"
+name = "3DPrint"
 version = "0.1.0"
 description = "Self-hosted 3D printing MCP server: generate, edit, render, slice, print."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "XPrint project" }]
+authors = [{ name = "3DPrint project" }]
 keywords = ["mcp", "3d-printing", "cad", "slicer", "klipper"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -36,10 +36,10 @@ dev = [
 ]
 
 [project.scripts]
-xprint = "xprint.cli:main"
+3dprint = "print3d.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/xprint"]
+packages = ["src/print3d"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -59,4 +59,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["xprint"]
+known-first-party = ["print3d"]

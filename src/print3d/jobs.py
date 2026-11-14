@@ -217,7 +217,7 @@ class JobStore:
         if not path.is_file():
             raise JobNotFound(
                 f"Job not found: {job_id}",
-                hint="List jobs with `xprint jobs`, or check the id returned at submit time.",
+                hint="List jobs with `3dprint jobs`, or check the id returned at submit time.",
                 details={"job_id": job_id},
             )
         try:

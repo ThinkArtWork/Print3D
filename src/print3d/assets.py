@@ -107,7 +107,7 @@ class AssetStore:
         if not path.is_file():
             raise NotFound(
                 f"Unknown asset: {asset_id}",
-                hint="Run `xprint asset list` to see available assets.",
+                hint="Run `3dprint asset list` to see available assets.",
             )
         return json.loads(path.read_text(encoding="utf-8"))
 

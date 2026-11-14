@@ -1,6 +1,6 @@
-# XPrint
+# 3DPrint
 
-**XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
+**3DPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
 > 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、STEP 导入与 SVG/DXF 工程图纸、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **28 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
 
@@ -14,38 +14,38 @@
 需要 Python ≥ 3.11（本机验证于 3.14）与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-git clone <this-repo> XPrint && cd XPrint
+git clone <this-repo> 3DPrint && cd 3DPrint
 
 # 安装（含开发依赖；build123d 是核心依赖）
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python -e ".[dev]"
 
-# 初始化工作区 ~/.xprint（生成 config.json 目录骨架，不写密钥）
-.venv/bin/xprint init
+# 初始化工作区 ~/.3dprint（生成 config.json 目录骨架，不写密钥）
+.venv/bin/3dprint init
 
 # 看看这台机器能做什么：provider 有没有 key、CAD/渲染/切片是否可用
-.venv/bin/xprint capabilities
+.venv/bin/3dprint capabilities
 
 # 以 MCP stdio 方式启动（宿主拉起的标准姿势）
-.venv/bin/xprint serve --stdio
+.venv/bin/3dprint serve --stdio
 
 # 或者本地 HTTP（默认 127.0.0.1:8765；非回环地址强制要求 Bearer token）
-.venv/bin/xprint serve --http --port 8765
+.venv/bin/3dprint serve --http --port 8765
 ```
 
-工作区默认 `~/.xprint`，可用 `--workspace` 或环境变量 `XPRINT_WORKSPACE` 覆盖（测试/多实例时建议覆盖）。`xprint config` 打印生效配置，密钥永远不出现。
+工作区默认 `~/.3dprint`，可用 `--workspace` 或环境变量 `PRINT3D_WORKSPACE` 覆盖（测试/多实例时建议覆盖）。`3dprint config` 打印生效配置，密钥永远不出现。
 
-把 XPrint 接到 DSH 有两种方式，推荐第一种（不需要安装任何本地插件包）：
+把 3DPrint 接到 DSH 有两种方式，推荐第一种（不需要安装任何本地插件包）：
 
 **方式 A：官方 `mcp-manager`（推荐）**。DSH 自带 `@deepseek-ai/dsh-mcp-manager`，在 `Settings → MCP` 里加一条 stdio 服务器即可（命令必须是**绝对路径**，DSH 不会展开 `~`）:
 
 ```json
 {
-  "xprint": {
+  "3dprint": {
     "transport": "stdio",
-    "command": "/absolute/path/to/XPrint/.venv/bin/xprint",
+    "command": "/absolute/path/to/3DPrint/.venv/bin/3dprint",
     "args": ["serve", "--stdio"],
-    "env": { "XPRINT_WORKSPACE": "/absolute/path/to/XPrint/.xprint" },
+    "env": { "PRINT3D_WORKSPACE": "/absolute/path/to/3DPrint/.3dprint" },
     "enabled": true
   }
 }
@@ -53,9 +53,9 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 如果本机 DSH 设置里没有 MCP 页（0.2.2-rc.3 的已知情况），直接写 profile 的 `cordis.patch.yml`：`id` 必须是 **`mcp-manager`**（不是 README 里旧的 `mcp`），profile 里是**整表替换**继承来的 servers，改完重启 DSH。
 
-**方式 B：自定义 bundle**。在 **Plugins → Add plugin** 里选择本仓库的 `dsh-xprint-mcp/` 目录（或让 agent 调 `plugin_manager` 的 `install_bundle`），细节见 [dsh-xprint-mcp/README.md](dsh-xprint-mcp/README.md)。
+**方式 B：自定义 bundle**。在 **Plugins → Add plugin** 里选择本仓库的 `dsh-3dprint-mcp/` 目录（或让 agent 调 `plugin_manager` 的 `install_bundle`），细节见 [dsh-3dprint-mcp/README.md](dsh-3dprint-mcp/README.md)。
 
-之后在会话里直接调用 `mcp__xprint__system_status`、`mcp__xprint__capabilities` 等工具。
+之后在会话里直接调用 `mcp__3dprint__system_status`、`mcp__3dprint__capabilities` 等工具。
 
 ### 交互式 3D 查看
 
@@ -63,7 +63,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 - 构建成功时（`model_build`、`blender_run`、`generate_local` / `generate_cloud`）自动重写这个文件并返回 `viewer_file`；宿主执行 `present(viewer_file)` 即可；
 - 旧资产或需要手动刷新时调用 `model_view(asset_id, confirm="VIEW <asset_id>")`；传 `revision="v001"` 可让查看器默认打开该版本；
-- 命令行：`xprint view <asset_id> [--revision v001] [--open]`。
+- 命令行：`3dprint view <asset_id> [--revision v001] [--open]`。
 - 旧版本目录里遗留的 `vNNN/viewer.html` 会自动改成 526 字节的跳转页，指向资产级查看器；聊天里早先的旧卡片点开也能落到带下拉框的新文件。
 
 几何以 base64 内嵌，单文件、无 CDN、无服务端。打开后：
@@ -73,11 +73,11 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 - 双击复位，`自旋` 开关，`截图` 导出当前版本 PNG，`导出 STL` 把当前版本几何直接下载为二进制 STL（可在切片软件里复核）；
 - HUD 显示当前版本的三角面数、包围盒 mm、体积 cm³。
 
-为什么不做侧栏面板：2026-11-14 曾实现并安装 `dsh-xprint-panel/`（DSH 左侧栏只读面板）。实测后认为价值不足——对话流里已有 `model_preview` 的四视图 PNG，面板只是同一数据的第二视图，却多一个 8765 进程和一套 CORS / 凭据边界。面板已卸载、源码已删除（历史见 [PLAN §17](docs/PLAN.md)）；3D 交互改由这个自包含 HTML 承担，不需要 DSH 客户端插件。
+为什么不做侧栏面板：2026-11-14 曾实现并安装 `dsh-3dprint-panel/`（DSH 左侧栏只读面板）。实测后认为价值不足——对话流里已有 `model_preview` 的四视图 PNG，面板只是同一数据的第二视图，却多一个 8765 进程和一套 CORS / 凭据边界。面板已卸载、源码已删除（历史见 [PLAN §17](docs/PLAN.md)）；3D 交互改由这个自包含 HTML 承担，不需要 DSH 客户端插件。
 
 ## 两条建模路径
 
-XPrint **不自己接任何 LLM**。它把建模闭环的原语暴露成 MCP 工具，由**你正在用的宿主模型**驱动；每条路径都以真实几何检查收尾，而不是凭文字想象。
+3DPrint **不自己接任何 LLM**。它把建模闭环的原语暴露成 MCP 工具，由**你正在用的宿主模型**驱动；每条路径都以真实几何检查收尾，而不是凭文字想象。
 
 ### 路径一：文字 → 模型（直接写脚本）
 
@@ -126,15 +126,15 @@ asset_list()                                   # 每个资产带 latest_revision
 命令行同样支持：
 
 ```bash
-xprint view <asset_id> --revision v001 --open
-xprint preview <asset_id> --revision v001 --out /tmp/v001.png
+3dprint view <asset_id> --revision v001 --open
+3dprint preview <asset_id> --revision v001 --out /tmp/v001.png
 ```
 
 在对话里直接说「看一下 v001」即可，宿主模型会调用 `model_show` 列出历史，再对该版本 `model_preview` / `model_view` 并把文件 `present` 出来。
 
 ### 图片理解
 
-XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态）自己看，XPrint 负责把图片存成 reference、附到版本上、并在预览时回传。参考图看不到的背面、内部结构和精确尺寸，需要宿主模型在 `prompt` 里补充或用文字提问。
+3DPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态）自己看，3DPrint 负责把图片存成 reference、附到版本上、并在预览时回传。参考图看不到的背面、内部结构和精确尺寸，需要宿主模型在 `prompt` 里补充或用文字提问。
 
 ### 路径三：Blender（bpy 场景脚本）
 
@@ -191,7 +191,7 @@ mesh_fit(
 不下载模型权重，也不绑定某个框架：任何能读提示词/图片、写出 STL 的本地命令都能接进来。
 
 ```json
-// ~/.xprint/config.json —— providers.local.<id>
+// ~/.3dprint/config.json —— providers.local.<id>
 {
   "providers": {
     "local": {
@@ -210,9 +210,9 @@ mesh_fit(
 ```text
 generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>")
    → 后台任务（job_id）
-   → 命令在 clean env 中运行，cwd=<outdir>，可读 XPRINT_LOCAL_OUT
+   → 命令在 clean env 中运行，cwd=<outdir>，可读 PRINT3D_LOCAL_OUT
    → 必须写出 <outdir>/mesh.stl（或 stdout 打印 {"mesh": "/path/model.stl"}）
-   → XPrint 建资产（kind=local）、算 geometry checks、附 reference
+   → 3DPrint 建资产（kind=local）、算 geometry checks、附 reference
    → job_status 轮询 → model_preview(asset_id)
 ```
 
@@ -223,7 +223,7 @@ generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>"
 云 provider 是异步任务：提交 → 轮询 → 下载 → 转 STL → 建资产 → 预览。不需要本机能跑模型。
 
 ```json
-// ~/.xprint/config.json —— providers.cloud.<id>
+// ~/.3dprint/config.json —— providers.cloud.<id>
 {
   "providers": {
     "cloud": {
@@ -266,10 +266,10 @@ generate_cloud(provider="tripo", prompt=..., image=..., confirm="CLOUD <name>")
 
 ### 路径六：切片（OrcaSlicer CLI）
 
-切片器是外部进程（GPL，只调用不链接），profile 从用户已安装的切片器读取，XPrint 不分发。
+切片器是外部进程（GPL，只调用不链接），profile 从用户已安装的切片器读取，3DPrint 不分发。
 
 ```json
-// ~/.xprint/config.json —— targets.<name>
+// ~/.3dprint/config.json —— targets.<name>
 {
   "targets": {
     "a1": {
@@ -294,7 +294,7 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1")
 slice_inspect(slice_id)                  → 层数、预计时间、耗材、printer_model、warnings
 ```
 
-切片时可以直接告诉 XPrint 工艺要求，系统把它们写进本次切片的 process/filament 私有副本：
+切片时可以直接告诉 3DPrint 工艺要求，系统把它们写进本次切片的 process/filament 私有副本：
 
 ```text
 slice_plan(asset_id, "a1", material="PETG", layer_height=0.24,
@@ -336,7 +336,7 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
 
 ### 路径七：发送到打印机（Moonraker / OctoPrint / Bambu LAN / PrusaLink / 自定义 HTTP）
 
-切片完成后，XPrint 通过打印机自己的 HTTP API 上传并启动，不经过厂商云。
+切片完成后，3DPrint 通过打印机自己的 HTTP API 上传并启动，不经过厂商云。
 
 ```json
 // config.json —— printers 是数组
@@ -428,12 +428,12 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 }
 ```
 
-`trim_unused_tools` + `tool_macros` 用于多头机器：切片完成后，XPrint 扫描起始 G-code，把 `EXTRUDER=n` 且 n 不在本次使用工具头里的预热/进料/校准行删掉。例如 U1 只用到 T0 时，G-code 里只保留 T0 的预热/进料/校准行。注意：U1 的启动总时长主要花在床网、喷嘴清洁和预热上；实测裁剪前后总启动都约 5.5 分钟，因此这项优化在 U1 上收益有限，但在“每个头都要实际进料校准”的机器上会明显。它是可选的文本级后处理，只匹配配置里列出的宏名，不会改动模型路径或挤出段；不配置则保持厂商原始行为。
+`trim_unused_tools` + `tool_macros` 用于多头机器：切片完成后，3DPrint 扫描起始 G-code，把 `EXTRUDER=n` 且 n 不在本次使用工具头里的预热/进料/校准行删掉。例如 U1 只用到 T0 时，G-code 里只保留 T0 的预热/进料/校准行。注意：U1 的启动总时长主要花在床网、喷嘴清洁和预热上；实测裁剪前后总启动都约 5.5 分钟，因此这项优化在 U1 上收益有限，但在“每个头都要实际进料校准”的机器上会明显。它是可选的文本级后处理，只匹配配置里列出的宏名，不会改动模型路径或挤出段；不配置则保持厂商原始行为。
 
 多色语义：校准按**物理工具头**去重。
 - 多工具头机器（U1，`toolheads` > 1）：打印用到 T0/T1/T2 三种颜色，就分别校准这 3 个物理头。
 - 单喷嘴多色（AMS/换料，`toolheads: 1`）：无论用 1 种还是 3 种颜色，只校准该喷嘴一次；即使切片 G-code 里出现 T0/T1/T2，也不会对同一物理头重复校准。`slots` 里的 `toolhead` 字段可显式声明“哪个槽位属于哪个物理头”，不填时按单头自动归并。
-- 这不是 XPrint 自创的规则：Orca/Bambu 在单色打印启动时校准，在多色打印中改用每种耗材已保存的 K 值，在换料时切换（[OrcaSlicer 文案](https://github.com/OrcaSlicer/OrcaSlicer/blob/3b58217b47fdbea46db7abc2c6b16c3b3f4364a2/localization/i18n/en/OrcaSlicer_en.po#27)、[Bambu 流量动力学校准](https://www.orcaslicer.com/wiki/calibration/adaptive_pressure_advance_calib)）。因此同一喷嘴按颜色重复跑启动校准既慢又没有额外收益。
+- 这不是 3DPrint 自创的规则：Orca/Bambu 在单色打印启动时校准，在多色打印中改用每种耗材已保存的 K 值，在换料时切换（[OrcaSlicer 文案](https://github.com/OrcaSlicer/OrcaSlicer/blob/3b58217b47fdbea46db7abc2c6b16c3b3f4364a2/localization/i18n/en/OrcaSlicer_en.po#27)、[Bambu 流量动力学校准](https://www.orcaslicer.com/wiki/calibration/adaptive_pressure_advance_calib)）。因此同一喷嘴按颜色重复跑启动校准既慢又没有额外收益。
 
 | 适配器 / 机型 | 切片参数 | 槽位匹配 | 板型选择 | 自动读板型 | 校准命令 | 读校准系数 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -446,7 +446,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 - `printer_status` 的 `capabilities` 会直接报告 `flow_calibration.supported` / `factors_configured` / `trim_unused_tools`、`build_plates`、`build_plate_detection`；`printer_list` 报告配置层面的 `flow_calibration_configured`，不需要联网。
 - 按需校准是“起始宏裁剪”，不改变固件里的 `flow_calib_extruders` 全局开关；如果厂商宏名字不同，把实际宏名填进 `tool_macros` 即可，未列出的宏不会被碰。
 - `build_plates` 为空表示接受切片器认识的所有板型；非空时 `slice_plan`/`slice_run` 会拒绝不在列表里的板型，并列出支持的取值。
-- 板型 id 统一用 XPrint 的 `textured_pei` / `smooth_pei` / `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`，由切片适配器映射到 Orca 的 `curr_bed_type`；换切片器时只需在切片适配器里换映射，不改工具参数。
+- 板型 id 统一用 3DPrint 的 `textured_pei` / `smooth_pei` / `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`，由切片适配器映射到 Orca 的 `curr_bed_type`；换切片器时只需在切片适配器里换映射，不改工具参数。
 - 自动读板型依赖固件暴露字段；目前只有厂商返回 `build_plate` / `bed_type` 等 JSON 字段时才会生效，U1 不返回，所以仍需首次手选。
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
 - 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`；PrusaLink 与声明式 `http` 由单元测试覆盖（Digest 重试、上传头、启动/取消路径、状态映射），尚无对应真机。
@@ -508,7 +508,7 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 3. **路径沙箱**：除 `reference_import`（只读用户给的图片路径）和 `asset_export`（只写用户指定的目标）外，所有路径经 `safe_path()` 解析符号链接后校验，逃出工作区一律 `path_outside_workspace`。
 4. **脚本策略 + 执行沙箱**：build123d 脚本先过 AST 审查（禁 `os/pathlib/subprocess/socket/shutil/ctypes/requests/urllib/http/multiprocessing`、禁 `eval/exec/open`…），再在 `cad_worker.py` 子进程里执行：RLIMIT_CPU/FSIZE/NOFILE、独立进程组、超时 SIGKILL、环境变量剔除密钥。bpy 脚本同样先过静态审查（同样禁网络/进程/文件模块，必须使用 `bpy`），再由 `blender -b --factory-startup` 子进程执行，使用独立的 Blender 配置目录、超时杀进程组。`generate_local` 运行的是用户自己配置的命令，环境变量剔除密钥并带超时；这是「用户信任本机命令」的显式边界。静态审查是纵深防御，不是沙箱；真正的隔离边界是子进程 + 资源限额。
 5. **不开放任意 G-code**：切片产物先检查再发送，`printer_*` 只接受切片器产物。
-6. **密钥**：只从环境变量或 `~/.xprint/secrets.json`（0600）读取；日志与工具输出统一脱敏。
+6. **密钥**：只从环境变量或 `~/.3dprint/secrets.json`（0600）读取；日志与工具输出统一脱敏。
 7. **打印前检查**：`send` 要求切片成功、G-code 存在、打印机 idle 且型号匹配；上传后立即启动是默认行为，没有自动重试，取消走 `printer_cancel`。
 
 ## 开发
@@ -524,13 +524,13 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 ## 目录
 
 ```
-XPrint/
+3DPrint/
   pyproject.toml
-  src/xprint/
+  src/print3d/
     server.py          # MCP 入口（stdio / streamable HTTP）+ 28 个工具
-    cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|view|image|preview
+    cli.py             # 3dprint init|capabilities|status|config|tools|serve|job|cad|view|image|preview
     config.py          # config.json / secrets / 环境变量优先级
-    workspace.py       # ~/.xprint 布局 + safe_path 沙箱
+    workspace.py       # ~/.3dprint 布局 + safe_path 沙箱
     jobs.py            # 任务状态机与 job.json
     assets.py          # 资产 manifest + vNNN 版本 + reference
     images.py          # 概念图生成（OpenAI 兼容）+ reference 存储
@@ -542,7 +542,7 @@ XPrint/
     capabilities.py    # 能力探测（只读）
     script_policy.py   # build123d 脚本静态审查
     errors.py          # 统一错误码
-  dsh-xprint-mcp/      # DSH 配置文件型 bundle（stdio 工具）
+  dsh-3dprint-mcp/      # DSH 配置文件型 bundle（stdio 工具）
   tests/
   docs/
 ```

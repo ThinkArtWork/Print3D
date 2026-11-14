@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 from tests.stl_helpers import write_stl
 
-from xprint.config import TargetSettings
-from xprint.errors import ConfigError, InvalidArgument
-from xprint.slicers import (
+from print3d.config import TargetSettings
+from print3d.errors import ConfigError, InvalidArgument
+from print3d.slicers import (
     SliceOptions,
     SliceStore,
     build_command,
