@@ -66,3 +66,4 @@ def test_list(workspace) -> None:
     listing = store.list()
     assert {item["name"] for item in listing} == {"one", "two"}
     assert all(item["revisions"] == 0 for item in listing)
+    assert all(item["latest_revision"] is None for item in listing)

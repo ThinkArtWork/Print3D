@@ -302,11 +302,14 @@ class AssetStore:
                 manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            revisions = manifest.get("revisions", [])
             items.append(
                 {
                     "asset_id": manifest.get("asset_id", path.name),
                     "name": manifest.get("name"),
-                    "revisions": len(manifest.get("revisions", [])),
+                    "kind": manifest.get("kind", "build123d"),
+                    "revisions": len(revisions),
+                    "latest_revision": revisions[-1].get("revision") if revisions else None,
                     "updated_at": manifest.get("updated_at"),
                 }
             )

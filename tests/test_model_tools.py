@@ -136,6 +136,8 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
     assert payload["viewer_file"].endswith("viewer.html")
     assert Path(payload["viewer_file"]).is_file()
     assert payload["viewer_path"].startswith("assets/")
+    listed = call(runtime, "asset_list", {})
+    assert listed["assets"][0]["latest_revision"] == "v001"
     assert payload["viewer_path"].endswith("/viewer.html")
 
     revision = workspace.root / Path(written["script_path"]).parent
@@ -150,6 +152,9 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
     assert shown["revision"] == "v001"
     assert "build_part" in shown["script"]
     assert shown["revisions"][0]["build_ok"] is True
+    assert shown["revisions"][0]["built"] is True
+    assert shown["revisions"][0]["viewer"].endswith("v001/viewer.html")
+    assert shown["revisions"][0]["volume_mm3"] == 8000.0
 
 
 def test_model_build_requires_exact_confirm(workspace) -> None:

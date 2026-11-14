@@ -107,6 +107,27 @@ reference_import(path, confirm="IMPORT <name>")       # 或导入用户上传的
 
 同一资产的每次修改都是一次 `model_write`（带 `asset_id` 追加 `v002`、`v003`…），`prompt` 记录这一轮的要求；`model_show` 读回任意版本的脚本、参数和构建记录。这样「这一轮改哪里、哪些保留」有据可查，也方便回滚。
 
+#### 查看历史版本
+
+```text
+asset_list()                                   # 每个资产带 latest_revision
+   → model_show(asset_id)                      # revisions[]：prompt / model / bbox / volume / 是否构建 / viewer
+   → model_preview(asset_id, revision="v001")  # 该版本的四视图 PNG（构建过才有）
+   → model_view(asset_id, revision="v001",
+                confirm="VIEW <asset_id>")     # 该版本的交互式 viewer.html
+```
+
+`model_show` 的每个 revision 里现在会带 `prompt`、`model`、`bbox_mm`、`volume_mm3`、`built` 和 `viewer`（已生成时给出路径）。旧版本若还没生成 viewer，用 `model_view(..., revision=...)` 补生成即可。
+
+命令行同样支持：
+
+```bash
+xprint view <asset_id> --revision v001 --open
+xprint preview <asset_id> --revision v001 --out /tmp/v001.png
+```
+
+在对话里直接说「看一下 v001」即可，宿主模型会调用 `model_show` 列出历史，再对该版本 `model_preview` / `model_view` 并把文件 `present` 出来。
+
 ### 图片理解
 
 XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态）自己看，XPrint 负责把图片存成 reference、附到版本上、并在预览时回传。参考图看不到的背面、内部结构和精确尺寸，需要宿主模型在 `prompt` 里补充或用文字提问。

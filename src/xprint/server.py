@@ -2166,9 +2166,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="model_show",
         description=(
-            "Return one asset's manifest and the source of a stored revision "
-            "(latest by default), so a client model can read, explain or repair it. "
-            "Read-only."
+            "Return one asset's manifest, its revision history (prompt, model, "
+            "geometry summary, viewer availability) and the source of a stored "
+            "revision (latest by default), so a client model can read, explain, "
+            "compare or repair it. Read-only."
         ),
     )
     def model_show(asset_id: str, revision: str = "") -> dict[str, Any]:
@@ -2196,8 +2197,26 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "created_at": item.get("created_at"),
                         "checks": item.get("checks", {}),
                         "build_ok": (item.get("build") or {}).get("ok"),
+                        "built": bool((item.get("build") or {}).get("ok")),
+                        "bbox_mm": ((item.get("build") or {}).get("checks") or {}).get("bbox_mm"),
+                        "volume_mm3": ((item.get("build") or {}).get("checks") or {}).get(
+                            "volume_mm3"
+                        ),
+                        "volume_cm3": ((item.get("build") or {}).get("checks") or {}).get(
+                            "volume_cm3"
+                        ),
                         "artifacts": sorted(item.get("artifacts", {})),
                         "reference": (item.get("reference") or {}).get("file"),
+                        "prompt": item.get("prompt"),
+                        "model": item.get("model"),
+                        "modeler": item.get("modeler"),
+                        "viewer": (
+                            f"assets/{asset_id}/{item.get('revision')}/viewer.html"
+                            if (
+                                assets.revision_dir(asset_id, item.get("revision")) / "viewer.html"
+                            ).is_file()
+                            else None
+                        ),
                     }
                     for item in manifest.get("revisions", [])
                 ],
