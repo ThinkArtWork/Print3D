@@ -17,6 +17,7 @@ from print3d.slicers import (
     build_command,
     find_slicer,
     new_slice_id,
+    normalise_slicer,
     parse_gcode,
     parse_machine_bed,
     prepare_profiles,
@@ -617,3 +618,12 @@ def test_slice_options_arc_fitting_is_opt_in() -> None:
     options = SliceOptions(material="PLA", arc_fitting=True)
     assert options.resolved()["arc_fitting"] is True
     assert options.process_overrides()["enable_arc_fitting"] == "1"
+
+
+def test_normalise_slicer_aliases() -> None:
+    assert normalise_slicer(None) == "orca"
+    assert normalise_slicer("") == "orca"
+    assert normalise_slicer("OrcaSlicer") == "orca"
+    assert normalise_slicer("orca-slicer") == "orca"
+    assert normalise_slicer("Snapmaker Orca") == "orca"
+    assert normalise_slicer("bogus") == "bogus"

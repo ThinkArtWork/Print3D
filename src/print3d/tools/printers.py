@@ -21,7 +21,6 @@ from ..errors import (
 )
 from ..jobs import sha256_file
 from ..printers import (
-    PRINTER_ADAPTERS,
     build_printer,
     normalise_flow_calibration,
     normalise_slots,
@@ -59,7 +58,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
                     {
                         "id": entry.id,
                         "adapter": entry.adapter,
-                        "adapter_known": entry.adapter.lower() in PRINTER_ADAPTERS,
+                        "adapter_known": rt.registry.has("printer", entry.adapter.lower()),
                         "model": entry.model,
                         "base_url": entry.base_url,
                         "serial": entry.serial,
@@ -183,10 +182,11 @@ def register(server: FastMCP, rt: Runtime) -> None:
                     details={"expected": expected},
                 )
             chosen = (adapter or "").lower()
-            if chosen not in PRINTER_ADAPTERS:
+            known_adapters = rt.registry.names("printer")
+            if chosen not in known_adapters:
                 raise InvalidArgument(
                     f"Unknown printer adapter: {adapter}",
-                    hint=f"Supported adapters: {', '.join(PRINTER_ADAPTERS)}",
+                    hint=f"Supported adapters: {', '.join(known_adapters)}",
                 )
             if not base_url.strip():
                 raise InvalidArgument(

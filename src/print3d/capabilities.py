@@ -22,6 +22,7 @@ from . import __version__
 from .config import LoadedConfig, Secrets
 from .jobs import JobStore
 from .registry import Registry
+from .slicers import normalise_slicer
 from .workspace import Workspace
 
 
@@ -227,7 +228,7 @@ def probe_render(cfg: LoadedConfig) -> dict[str, Any]:
 def probe_slicers(cfg: LoadedConfig, registry: Registry) -> list[dict[str, Any]]:
     slicers = []
     for target_name, target in sorted(cfg.config.targets.items()):
-        adapter_known = registry.has("slicer", target.slicer)
+        adapter_known = registry.has("slicer", normalise_slicer(target.slicer))
         path_present = _exists(target.slicer_path) if target.slicer_path else None
         profiles_present = _exists(target.profiles_root) if target.profiles_root else None
         problems = []
@@ -264,7 +265,7 @@ def probe_printers(cfg: LoadedConfig, registry: Registry) -> list[dict[str, Any]
                 "adapter": printer.adapter,
                 "base_url": printer.base_url,
                 "toolheads": printer.toolheads,
-                "adapter_known": registry.has("printer", printer.adapter),
+                "adapter_known": registry.has("printer", printer.adapter.lower()),
                 "configured": True,
             }
         )

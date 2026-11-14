@@ -24,10 +24,10 @@ from ..slicers import (
     build_command,
     find_slicer,
     new_slice_id,
+    normalise_slicer,
     parse_machine_bed,
     probe_slicer,
     resolve_profiles,
-    slice_stl,
     validate_slice_id,
 )
 from .common import (
@@ -53,11 +53,14 @@ def register(server: FastMCP, rt: Runtime) -> None:
             default_info = probe_slicer(default_binary)
             for name, configured in rt.loaded.config.targets.items():
                 problems: list[str] = []
+                adapter_known = rt.registry.has("slicer", normalise_slicer(configured.slicer))
                 try:
                     binary = find_slicer(configured.slicer_path)
                 except Print3DError as exc:
                     binary = None
                     problems.append(exc.message)
+                if not adapter_known:
+                    problems.append(f"no slicer adapter registered for {configured.slicer!r}")
                 info = probe_slicer(binary) if binary is not None else None
                 if info is None:
                     problems.append("no slicer binary found")
@@ -80,6 +83,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
                         "name": name,
                         "printer_model": configured.printer_model,
                         "slicer": configured.slicer,
+                        "adapter_known": adapter_known,
                         "binary": str(binary) if binary is not None else None,
                         "version": info.version if info is not None else None,
                         "profiles": resolved,
@@ -199,11 +203,13 @@ def register(server: FastMCP, rt: Runtime) -> None:
                 )
             problems: list[str] = []
             binary = None
+            adapter = None
             try:
-                binary = find_slicer(configured.slicer_path)
+                adapter = rt.registry.create("slicer", normalise_slicer(configured.slicer))
+                binary = adapter.find(configured.slicer_path)
             except Print3DError as exc:
                 problems.append(exc.message)
-            info = probe_slicer(binary) if binary is not None else None
+            info = adapter.probe(binary) if adapter is not None and binary is not None else None
             if binary is None:
                 problems.append("no slicer binary found")
             elif info is not None:
@@ -376,7 +382,8 @@ def register(server: FastMCP, rt: Runtime) -> None:
                     f"Revision {rev} has no built model yet",
                     hint="Call model_build first, then slice_run.",
                 )
-            binary = find_slicer(configured.slicer_path)
+            adapter = rt.registry.create("slicer", normalise_slicer(configured.slicer))
+            binary = adapter.find(configured.slicer_path)
             if binary is None:
                 raise AdapterUnavailable(
                     "No slicer found",
@@ -397,7 +404,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
 
             def work(job_id: str) -> dict[str, Any]:
                 rt.store.set_progress(job_id, 0.1)
-                result = slice_stl(
+                result = adapter.slice(
                     stl,
                     configured,
                     slice_dir,

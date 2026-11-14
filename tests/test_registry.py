@@ -55,6 +55,8 @@ def test_snapshot_shape() -> None:
         "printer",
     }
     assert snap["image"] == ["openai"]
+    assert snap["slicer"] == ["orca"]
+    assert snap["printer"] == ["bambu_lan", "http", "moonraker", "octoprint", "prusalink"]
 
 
 def test_unregister() -> None:
@@ -63,3 +65,11 @@ def test_unregister() -> None:
     reg.unregister("slicer", "orca")
     assert not reg.has("slicer", "orca")
     assert len(reg) == 0
+
+
+def test_builtin_registers_slicer_and_printer_adapters() -> None:
+    reg = builtin_registry()
+    adapter = reg.create("slicer", "orca")
+    assert adapter.name == "orca"
+    assert reg.has("printer", "moonraker")
+    assert not reg.has("printer", "not-a-printer")

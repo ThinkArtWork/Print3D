@@ -20,13 +20,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
 
 from .config import PrinterSettings, Secrets
 from .errors import AdapterUnavailable, AdapterUnknown, InvalidArgument
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .registry import Registry
 
 PRINTER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 PRINTER_ADAPTERS = ("moonraker", "octoprint", "bambu_lan", "prusalink", "http")
@@ -910,3 +913,30 @@ def build_printer(
         flow_calibration=printer.flow_calibration,
         plate_keys=printer.plate_keys,
     )
+
+
+def register_adapters(registry: Registry) -> None:
+    """Populate the ``printer`` kind of *registry* with the built-in adapters."""
+    for name in PRINTER_ADAPTERS:
+        registry.register("printer", name, _adapter_factory(name), replace=True)
+
+
+def _adapter_factory(name: str) -> Any:
+    """Bind one adapter name to :func:`build_printer`; config stays the source of truth."""
+
+    def build(
+        printer: PrinterSettings,
+        *,
+        secrets: Secrets,
+        transport: httpx.BaseTransport | None = None,
+    ) -> Any:
+        configured = (printer.adapter or "").lower()
+        if configured != name:
+            raise AdapterUnknown(
+                f"printer {printer.id} is configured with adapter {configured!r}",
+                hint=f"Create {printer.id} through its configured adapter ({configured!r}).",
+                details={"printer": printer.id, "adapter": configured, "requested": name},
+            )
+        return build_printer(printer, secrets=secrets, transport=transport)
+
+    return build

@@ -92,7 +92,11 @@ class Registry:
 def builtin_registry() -> Registry:
     """A registry with every adapter that ships in this build."""
     from .images import generator_from_config
+    from .printers import register_adapters as register_printers
+    from .slicers import register_adapters as register_slicers
 
     registry = Registry()
     registry.register("image", "openai", generator_from_config)
+    register_printers(registry)
+    register_slicers(registry)
     return registry

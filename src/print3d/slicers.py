@@ -18,7 +18,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .cad import clean_env
 from .config import TargetSettings
@@ -26,6 +26,9 @@ from .errors import AdapterUnavailable, ConfigError, InvalidArgument, NotFound
 from .mesh import mesh_stats
 from .preview import load_stl
 from .workspace import Workspace, atomic_write_text
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .registry import Registry
 
 DEFAULT_TIMEOUT_S = 900.0
 MAX_OUTPUT_CHARS = 6000
@@ -41,6 +44,31 @@ SLICER_CANDIDATES = (
     "/usr/local/bin/orca-slicer",
     "/opt/homebrew/bin/orca-slicer",
 )
+
+#: Registered backend names (``slicer/<name>``): each drives an
+#: OrcaSlicer-compatible CLI, they differ only in how the binary is found.
+SLICER_ADAPTERS: tuple[str, ...] = ("orca",)
+
+
+#: Spellings people write in ``config.json``: ``slicer`` was informational before
+#: the registry existed (the binary always came from ``slicer_path``).
+_SLICER_ALIASES = {
+    "orca": "orca",
+    "orcaslicer": "orca",
+    "orca_slicer": "orca",
+    "snapmaker_orca": "orca",
+    "snapmakerorca": "orca",
+}
+
+
+def normalise_slicer(name: str | None) -> str:
+    """Map a configured slicer name onto a registered adapter name.
+
+    Unknown names are returned lower-cased so an error can quote them back.
+    """
+    key = "_".join((name or "").strip().lower().replace("-", " ").split()) or "orca"
+    return _SLICER_ALIASES.get(key, key)
+
 
 _DURATION_RE = re.compile(r"(?:(\d+)h\s*)?(?:(\d+)m\s*)?(\d+)s")
 _LAYER_RE = re.compile(r"^;\s*total layer number:\s*(\d+)", re.MULTILINE)
@@ -495,6 +523,34 @@ def probe_slicer(path: Path | str | None) -> SlicerInfo:
         supports_datadir=supports_datadir,
         problems=problems,
     )
+
+
+@dataclass(frozen=True)
+class SlicerAdapter:
+    """One slicer backend, built through ``registry.create('slicer', name)``."""
+
+    name: str
+
+    def find(self, explicit: str | None = None) -> Path | None:
+        return find_slicer(explicit)
+
+    def probe(self, path: Path | str | None) -> SlicerInfo:
+        return probe_slicer(path)
+
+    def slice(
+        self,
+        stl: Path,
+        target: TargetSettings,
+        workdir: Path,
+        **kwargs: Any,
+    ) -> SliceResult:
+        return slice_stl(stl, target, workdir, **kwargs)
+
+
+def register_adapters(registry: Registry) -> None:
+    """Populate the ``slicer`` kind of *registry* with the built-in backends."""
+    for name in SLICER_ADAPTERS:
+        registry.register("slicer", name, lambda _name=name: SlicerAdapter(_name), replace=True)
 
 
 def _profile_path(raw: str | Path, label: str) -> Path:

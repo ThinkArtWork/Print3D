@@ -125,3 +125,33 @@ def test_render_reports_a_bad_blender_path(workspace, monkeypatch) -> None:
     assert render["available"] is False
     assert "not found" in render["reason"]
     assert render["hint"] == "Set render.blender_path."
+
+
+def test_capabilities_report_registered_adapters(workspace) -> None:
+    workspace.config_path.write_text(
+        json.dumps(
+            {
+                "targets": {
+                    "u1": {
+                        "printer_model": "Snapmaker U1",
+                        "slicer": "orca",
+                    }
+                },
+                "printers": [
+                    {
+                        "id": "u1",
+                        "adapter": "Moonraker",
+                        "model": "Snapmaker U1",
+                        "base_url": "http://printer.local:7125",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded, secrets = load_all()
+    payload = build_capabilities(loaded, secrets, builtin_registry())
+    assert payload["slicers"][0]["adapter_known"] is True
+    assert payload["printers"][0]["adapter_known"] is True
+    assert "no slicer adapter registered" not in payload["slicers"][0]["problems"]
+    assert payload["adapters"]["slicer"] == ["orca"]
