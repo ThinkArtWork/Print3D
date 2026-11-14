@@ -133,6 +133,43 @@ def normalise_slots(slots: list[dict[str, Any]] | None, *, toolheads: int) -> li
     return out
 
 
+FLOW_CALIBRATION_KEYS = (
+    "enable_gcode",
+    "disable_gcode",
+    "factors_url",
+    "factors_key",
+    "extruder_keys",
+)
+
+
+def normalise_flow_calibration(value: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate the optional vendor flow-calibration block."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise InvalidArgument("flow_calibration must be an object")
+    out: dict[str, Any] = {}
+    for key in FLOW_CALIBRATION_KEYS:
+        raw = value.get(key)
+        if raw in (None, ""):
+            continue
+        if key == "extruder_keys":
+            if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+                raise InvalidArgument("flow_calibration.extruder_keys must be a list of strings")
+            out[key] = [item.strip() for item in raw if item.strip()]
+        else:
+            if not isinstance(raw, str):
+                raise InvalidArgument(f"flow_calibration.{key} must be a string")
+            out[key] = raw.strip()
+    unknown = set(value) - set(FLOW_CALIBRATION_KEYS)
+    if unknown:
+        raise InvalidArgument(
+            f"Unknown flow_calibration key(s): {', '.join(sorted(unknown))}",
+            hint=f"Known keys: {', '.join(FLOW_CALIBRATION_KEYS)}",
+        )
+    return out
+
+
 def validate_printer_id(value: str) -> str:
     if not isinstance(value, str) or not PRINTER_ID_RE.fullmatch(value):
         raise InvalidArgument(
@@ -153,6 +190,8 @@ class _HttpPrinter:
         api_key: str | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         transport: httpx.BaseTransport | None = None,
+        flow_calibration: dict[str, Any] | None = None,
+        plate_keys: list[str] | None = None,
     ) -> None:
         if not base_url:
             raise InvalidArgument(f"Printer {printer_id} has no base_url")
@@ -161,6 +200,8 @@ class _HttpPrinter:
         self.api_key = api_key
         self.timeout_s = timeout_s
         self._transport = transport
+        self.flow_calibration_cfg = dict(flow_calibration or {})
+        self.plate_keys = list(plate_keys or [])
 
     # -- plumbing ---------------------------------------------------------
     def _headers(self) -> dict[str, str]:
@@ -223,6 +264,60 @@ class _HttpPrinter:
     def start(self, filename: str) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
+    # -- calibration ------------------------------------------------------
+    def run_gcode(self, script: str) -> None:
+        raise AdapterUnavailable(
+            f"The {self.adapter!r} adapter cannot send raw G-code",
+            hint="Configure a printer adapter that supports gcode/script, or calibrate in the slicer.",
+        )
+
+    def flow_calibration(self) -> dict[str, Any]:
+        """Read vendor flow/pressure-advance factors from a configured JSON file."""
+        url = str(self.flow_calibration_cfg.get("factors_url") or "").strip()
+        if not url:
+            return {"source": None, "factors": {}, "env": {}}
+        payload = self._json(self._request("GET", url))
+        env = payload.get("env") if isinstance(payload, dict) else {}
+        return {"source": url, "factors": self._flow_factors(payload), "env": env or {}}
+
+    def _flow_factors(self, payload: dict[str, Any]) -> dict[str, Any]:
+        key = str(self.flow_calibration_cfg.get("factors_key") or "factor")
+        node: Any = payload
+        for part in key.split("."):
+            if not isinstance(node, dict):
+                node = {}
+                break
+            node = node.get(part)
+        if not isinstance(node, dict):
+            return {}
+        keys = self.flow_calibration_cfg.get("extruder_keys") or []
+        if keys:
+            factors = {}
+            for index, name in enumerate(keys):
+                value = node.get(name)
+                if isinstance(value, (int, float)):
+                    factors[f"T{index}"] = float(value)
+            return factors
+        return {
+            str(name): float(value)
+            for name, value in node.items()
+            if isinstance(value, (int, float))
+        }
+
+    def set_flow_calibrate(self, enabled: bool) -> None:
+        """Run the configured calibration-enable/disable G-code before a print."""
+        key = "enable_gcode" if enabled else "disable_gcode"
+        script = str(self.flow_calibration_cfg.get(key) or "").strip()
+        if not script:
+            raise AdapterUnavailable(
+                f"Printer {self.id} has no flow-calibration command configured",
+                hint=(
+                    "Set printers[].flow_calibration.enable_gcode (and disable_gcode) "
+                    "to your firmware's calibration macro, then call printer_save."
+                ),
+            )
+        self.run_gcode(script)
+
     def cancel(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
@@ -253,7 +348,8 @@ class MoonrakerPrinter(_HttpPrinter):
         state = str(stats.get("state") or "unknown")
         task = status.get("print_task_config") or {}
         detected = None
-        for key in ("build_plate", "bed_type", "plate_type", "curr_bed_type"):
+        keys = self.plate_keys or ["build_plate", "bed_type", "plate_type", "curr_bed_type"]
+        for key in keys:
             value = task.get(key)
             if isinstance(value, str) and value.strip():
                 detected = value.strip()
@@ -270,21 +366,8 @@ class MoonrakerPrinter(_HttpPrinter):
             raw={"print_stats": stats, "print_task_config": task},
         )
 
-    def flow_calibration(self) -> dict[str, Any]:
-        """Read the printer's calibrated pressure-advance factors (Snapmaker)."""
-        payload = self._json(
-            self._request("GET", "/server/files/config/snapmaker/flow_calibrator.json")
-        )
-        factors = payload.get("factor") or {}
-        return {
-            "source": "snapmaker/flow_calibrator.json",
-            "factors": {
-                str(key): float(value)
-                for key, value in factors.items()
-                if isinstance(value, (int, float))
-            },
-            "env": payload.get("env") or {},
-        }
+    def run_gcode(self, script: str) -> None:
+        self._request("POST", "/printer/gcode/script", params={"script": script})
 
     def upload(self, path: Path, *, name: str) -> str:
         response = self._request(
@@ -297,11 +380,6 @@ class MoonrakerPrinter(_HttpPrinter):
         item = payload.get("item") or {}
         return str(item.get("path") or name)
 
-    def set_flow_calibrate(self, enabled: bool) -> None:
-        """Ask the printer to run its own flow/pressure-advance calibration at start."""
-        script = f"SET_PRINT_PREFERENCES FLOW_CALIBRATE={1 if enabled else 0}"
-        self._request("POST", "/printer/gcode/script", params={"script": script})
-
     def start(self, filename: str) -> None:
         self._request("POST", "/printer/print/start", params={"filename": filename})
 
@@ -313,6 +391,9 @@ class OctoPrintPrinter(_HttpPrinter):
     """OctoPrint's documented REST API (X-Api-Key)."""
 
     adapter = "octoprint"
+
+    def run_gcode(self, script: str) -> None:
+        self._request("POST", "/api/printer/command", json={"commands": [script]})
 
     def status(self) -> PrinterState:
         printer = self._json(self._request("GET", "/api/printer"))
@@ -820,4 +901,6 @@ def build_printer(
         api_key=key,
         timeout_s=printer.timeout_s,
         transport=transport,
+        flow_calibration=printer.flow_calibration,
+        plate_keys=printer.plate_keys,
     )

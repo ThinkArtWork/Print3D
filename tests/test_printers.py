@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -171,10 +173,17 @@ def test_moonraker_reads_flow_calibration_factors() -> None:
             },
         )
     )
-    printer = MoonrakerPrinter("u1", base_url=MOON)
+    printer = MoonrakerPrinter(
+        "u1",
+        base_url=MOON,
+        flow_calibration={
+            "factors_url": "/server/files/config/snapmaker/flow_calibrator.json",
+            "factors_key": "factor",
+        },
+    )
     data = printer.flow_calibration()
     assert route.called
-    assert data["source"] == "snapmaker/flow_calibrator.json"
+    assert data["source"] == "/server/files/config/snapmaker/flow_calibrator.json"
     assert data["factors"]["extruder"] == pytest.approx(0.055761)
     assert data["env"]["k_max"] == pytest.approx(0.065)
 
@@ -184,7 +193,51 @@ def test_moonraker_sets_flow_calibration_preference() -> None:
     route = respx.post(f"{MOON}/printer/gcode/script").mock(
         return_value=httpx.Response(200, json={"result": "ok"})
     )
-    printer = MoonrakerPrinter("u1", base_url=MOON)
+    printer = MoonrakerPrinter(
+        "u1",
+        base_url=MOON,
+        flow_calibration={
+            "enable_gcode": "SET_PRINT_PREFERENCES FLOW_CALIBRATE=1",
+            "disable_gcode": "SET_PRINT_PREFERENCES FLOW_CALIBRATE=0",
+        },
+    )
     printer.set_flow_calibrate(True)
     assert route.called
     assert route.calls[0].request.url.params["script"] == "SET_PRINT_PREFERENCES FLOW_CALIBRATE=1"
+    printer.set_flow_calibrate(False)
+    assert route.calls[1].request.url.params["script"] == "SET_PRINT_PREFERENCES FLOW_CALIBRATE=0"
+
+
+def test_moonraker_flow_calibration_maps_extruder_keys() -> None:
+    printer = MoonrakerPrinter(
+        "u1",
+        base_url=MOON,
+        flow_calibration={
+            "factors_url": "/x.json",
+            "factors_key": "calibration.factor",
+            "extruder_keys": ["extruder", "extruder1"],
+        },
+    )
+    payload = {"calibration": {"factor": {"extruder": 0.04, "extruder1": 0.05}}}
+    assert printer._flow_factors(payload) == {"T0": 0.04, "T1": 0.05}
+
+
+def test_flow_calibration_without_config_is_a_noop() -> None:
+    printer = MoonrakerPrinter("u1", base_url=MOON)
+    assert printer.flow_calibration() == {"source": None, "factors": {}, "env": {}}
+    with pytest.raises(AdapterUnavailable):
+        printer.set_flow_calibrate(True)
+
+
+@respx.mock
+def test_octoprint_runs_configured_calibration_gcode() -> None:
+    route = respx.post(f"{OCTO}/api/printer/command").mock(return_value=httpx.Response(204))
+    printer = OctoPrintPrinter(
+        "octo",
+        base_url=OCTO,
+        api_key="k",
+        flow_calibration={"enable_gcode": "FLOW_CALIBRATE ENABLE=1"},
+    )
+    printer.set_flow_calibrate(True)
+    assert route.called
+    assert json.loads(route.calls[0].request.content) == {"commands": ["FLOW_CALIBRATE ENABLE=1"]}

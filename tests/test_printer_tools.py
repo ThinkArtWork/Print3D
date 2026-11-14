@@ -7,11 +7,13 @@ import json
 import time
 from pathlib import Path
 
+import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from xprint.errors import InvalidArgument
 from xprint.printers import PrinterState
-from xprint.server import Runtime, build_server
-from xprint.slicers import SliceStore, new_slice_id
+from xprint.server import Runtime, _apply_slot, build_server
+from xprint.slicers import SliceOptions, SliceStore, new_slice_id
 from xprint.workspace import Workspace
 
 
@@ -563,7 +565,14 @@ def test_printer_save_normalises_the_build_plate(workspace, tmp_path) -> None:
 def test_send_enables_printer_flow_calibration(tmp_path, monkeypatch) -> None:
     runtime = _runtime(
         tmp_path,
-        [{"id": "u1", "adapter": "moonraker", "base_url": "http://printer.local:7125"}],
+        [
+            {
+                "id": "u1",
+                "adapter": "moonraker",
+                "base_url": "http://printer.local:7125",
+                "flow_calibration": {"enable_gcode": "SET_PRINT_PREFERENCES FLOW_CALIBRATE=1"},
+            }
+        ],
     )
     fake = FakePrinter()
     monkeypatch.setattr("xprint.server.build_printer", lambda *a, **k: fake)
@@ -583,3 +592,132 @@ def test_send_enables_printer_flow_calibration(tmp_path, monkeypatch) -> None:
     assert finished["job"]["state"] == "succeeded"
     assert fake.flow_calibrate == [True]
     assert fake.started == [f"{slice_id}.gcode"]
+
+
+def test_printer_save_stores_vendor_capabilities(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    saved = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "voron",
+            "confirm": "SAVE PRINTER voron",
+            "adapter": "moonraker",
+            "base_url": "http://voron.local:7125",
+            "build_plates": ["textured_pei", "cool_plate"],
+            "plate_keys": ["bed_type"],
+            "flow_calibration": {
+                "enable_gcode": "FLOW_CALIBRATE ENABLE=1",
+                "disable_gcode": "FLOW_CALIBRATE ENABLE=0",
+                "factors_url": "/server/files/config/calibration.json",
+                "factors_key": "pa.factor",
+                "extruder_keys": ["extruder", "extruder1"],
+            },
+        },
+    )
+    assert saved["ok"] is True
+    entry = saved["printer"]
+    assert entry["build_plates"] == ["textured_pei", "cool_plate"]
+    assert entry["plate_keys"] == ["bed_type"]
+    assert entry["flow_calibration"]["enable_gcode"] == "FLOW_CALIBRATE ENABLE=1"
+    listed = _call(runtime, "printer_list", {})
+    row = next(item for item in listed["printers"] if item["id"] == "voron")
+    assert row["flow_calibration_configured"] is True
+    assert row["build_plates"] == ["textured_pei", "cool_plate"]
+
+
+def test_printer_save_rejects_unknown_calibration_keys(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    payload = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "voron",
+            "confirm": "SAVE PRINTER voron",
+            "adapter": "moonraker",
+            "base_url": "http://voron.local:7125",
+            "flow_calibration": {"enable_gcode": "X", "bogus": "y"},
+        },
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "bogus" in payload["error"]["message"]
+
+
+def test_slice_rejects_a_plate_the_printer_does_not_list(tmp_path) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [
+            {
+                "id": "voron",
+                "adapter": "moonraker",
+                "base_url": "http://voron.local:7125",
+                "build_plates": ["textured_pei"],
+            }
+        ],
+    )
+    with pytest.raises(InvalidArgument, match="does not list build plate"):
+        _apply_slot(
+            runtime,
+            SliceOptions(),
+            printer_id="voron",
+            slot=-1,
+            build_plate="cool_plate",
+        )
+
+
+def test_printer_status_reports_capabilities(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [
+            {
+                "id": "voron",
+                "adapter": "moonraker",
+                "base_url": "http://voron.local:7125",
+                "build_plates": ["textured_pei", "cool_plate"],
+                "plate_keys": ["bed_type"],
+                "flow_calibration": {
+                    "enable_gcode": "FLOW_CALIBRATE ENABLE=1",
+                    "factors_url": "/x.json",
+                },
+            }
+        ],
+    )
+    fake = FakePrinter()
+    fake.flow_calibration = lambda: {"source": "/x.json", "factors": {"T0": 0.04}, "env": {}}
+    monkeypatch.setattr("xprint.server.build_printer", lambda *a, **k: fake)
+    payload = _call(runtime, "printer_status", {"printer_id": "voron"})
+    assert payload["ok"] is True
+    caps = payload["capabilities"]
+    assert caps["build_plates"] == ["textured_pei", "cool_plate"]
+    assert caps["build_plate_detection"] is True
+    assert caps["flow_calibration"] == {"supported": True, "factors_configured": True}
+    assert payload["flow_calibration"]["factors"] == {"T0": 0.04}
+
+
+def test_printer_save_keeps_existing_capabilities_when_omitted(tmp_path) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [
+            {
+                "id": "voron",
+                "adapter": "moonraker",
+                "base_url": "http://voron.local:7125",
+                "build_plates": ["textured_pei"],
+                "flow_calibration": {"enable_gcode": "FLOW_CALIBRATE ENABLE=1"},
+            }
+        ],
+    )
+    saved = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "voron",
+            "confirm": "SAVE PRINTER voron",
+            "adapter": "moonraker",
+            "base_url": "http://voron.local:7125",
+        },
+    )
+    assert saved["ok"] is True
+    assert saved["printer"]["build_plates"] == ["textured_pei"]
+    assert saved["printer"]["flow_calibration"]["enable_gcode"] == "FLOW_CALIBRATE ENABLE=1"

@@ -63,6 +63,7 @@ from .printability import (
 from .printers import (
     PRINTER_ADAPTERS,
     build_printer,
+    normalise_flow_calibration,
     normalise_slots,
     validate_http_config,
     validate_printer_id,
@@ -296,6 +297,25 @@ def _bed_for_target(rt: Runtime, target: str) -> tuple[float, float] | None:
     return parse_machine_bed(machine)
 
 
+GCODE_CAPABLE_ADAPTERS = {"moonraker", "octoprint"}
+
+
+def _printer_capabilities(entry: Any, *, adapter: Any = None) -> dict[str, Any]:
+    """What this printer/adapter pair can do beyond the basic upload/start contract."""
+    calibration = dict(entry.flow_calibration or {})
+    return {
+        "build_plates": list(entry.build_plates or BUILD_PLATES),
+        "build_plate_default": entry.build_plate or None,
+        "build_plate_detection": bool(entry.plate_keys) or bool(getattr(adapter, "plate_keys", [])),
+        "slots": len(entry.slots or []),
+        "flow_calibration": {
+            "supported": bool(calibration.get("enable_gcode"))
+            and entry.adapter.lower() in GCODE_CAPABLE_ADAPTERS,
+            "factors_configured": bool(calibration.get("factors_url")),
+        },
+    }
+
+
 def _apply_slot(
     rt: Runtime,
     options: SliceOptions | None,
@@ -310,6 +330,12 @@ def _apply_slot(
     if not plate and entry is not None:
         plate = normalise_build_plate(entry.build_plate)
     slot = int(slot) if slot is not None else -1
+    if plate and entry is not None and entry.build_plates and plate not in entry.build_plates:
+        raise InvalidArgument(
+            f"printer {printer_id} does not list build plate {plate!r}",
+            details={"supported": list(entry.build_plates)},
+            hint="Pick one of the supported plates or update printer_save(build_plates=[...]).",
+        )
     if slot < 0 and not plate:
         return options, None
     if slot > 15:
@@ -2138,6 +2164,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "toolheads": entry.toolheads,
                         "slots": list(entry.slots or []),
                         "build_plate": entry.build_plate or None,
+                        "build_plates": list(entry.build_plates or []),
+                        "plate_keys": list(entry.plate_keys or []),
+                        "flow_calibration_configured": bool(
+                            (entry.flow_calibration or {}).get("enable_gcode")
+                        ),
                         "enabled": entry.enabled,
                         "has_key": bool(key),
                         "key_source": rt.secrets.key_source(entry.id, api_key_env=key_env),
@@ -2176,8 +2207,12 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             if callable(reader):
                 try:
                     calibration = reader()
-                except XPrintError:
-                    calibration = None
+                except XPrintError as exc:
+                    calibration = {
+                        "source": None,
+                        "factors": {},
+                        "error": error_payload(exc),
+                    }
             return {
                 "ok": True,
                 "writes_performed": False,
@@ -2189,7 +2224,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "toolheads": entry.toolheads,
                     "slots": list(entry.slots or []),
                     "build_plate": entry.build_plate or None,
+                    "build_plates": list(entry.build_plates or []),
                 },
+                "capabilities": _printer_capabilities(entry, adapter=adapter),
                 "state": state.to_dict(),
                 "build_plate": entry.build_plate or state.build_plate,
                 "build_plate_source": (
@@ -2205,7 +2242,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         description=(
             "Add or update a printer in config.json (upsert). slots is a list of "
             "{material, color, name?, toolhead?} entries in G-code tool order (T0 first); "
-            "single-nozzle AMS machines use one slot per AMS slot. WRITES the config: "
+            "single-nozzle AMS machines use one slot per AMS slot. build_plates restricts "
+            "the plate ids this printer accepts; plate_keys lists JSON fields to auto-detect "
+            "the plate; flow_calibration configures vendor calibration G-code / factors URL. "
+            "WRITES the config: "
             "confirm must be exactly 'SAVE PRINTER <printer_id>'. Adapters: moonraker, "
             "octoprint, bambu_lan, prusalink, http."
         ),
@@ -2226,6 +2266,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         http: dict[str, Any] | None = None,
         slots: list[dict[str, Any]] | None = None,
         build_plate: str = "",
+        build_plates: list[str] | None = None,
+        plate_keys: list[str] | None = None,
+        flow_calibration: dict[str, Any] | None = None,
         enabled: bool = True,
     ) -> dict[str, Any]:
         try:
@@ -2261,6 +2304,19 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 validate_http_config(http or {})
             slot_table = normalise_slots(slots, toolheads=int(toolheads))
             plate = normalise_build_plate(build_plate)
+            existing = next(
+                (item for item in rt.loaded.config.printers if item.id == printer_id),
+                None,
+            )
+            if not build_plates and existing is not None:
+                build_plates = list(existing.build_plates or [])
+            if not plate_keys and existing is not None:
+                plate_keys = list(existing.plate_keys or [])
+            if flow_calibration is None and existing is not None:
+                flow_calibration = dict(existing.flow_calibration or {})
+            supported_plates = [normalise_build_plate(str(item)) for item in (build_plates or [])]
+            plate_key_list = [str(item).strip() for item in (plate_keys or []) if str(item).strip()]
+            calibration = normalise_flow_calibration(flow_calibration)
             entry = PrinterSettings(
                 id=printer_id,
                 adapter=chosen,
@@ -2277,6 +2333,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 http=http or {},
                 slots=slot_table,
                 build_plate=plate,
+                build_plates=supported_plates,
+                plate_keys=plate_key_list,
+                flow_calibration=calibration,
             )
             path = save_printer(rt.loaded, entry)
             return {
@@ -2433,11 +2492,19 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Printer {printer_id} is busy ({state.state})",
                     hint="Wait for it to finish, or call printer_cancel first.",
                 )
-            if flow_calibrate and not hasattr(adapter, "set_flow_calibrate"):
-                raise InvalidArgument(
-                    f"flow_calibrate is not supported by the {entry.adapter!r} adapter",
-                    hint="Use a Moonraker printer, or slice with pressure_advance manually.",
+            if flow_calibrate:
+                configured = bool((entry.flow_calibration or {}).get("enable_gcode")) and hasattr(
+                    adapter, "set_flow_calibrate"
                 )
+                if not configured:
+                    raise InvalidArgument(
+                        f"printer {printer_id} has no flow-calibration command configured",
+                        hint=(
+                            "Set printers[].flow_calibration.enable_gcode to your firmware "
+                            "macro (for Snapmaker U1: "
+                            "'SET_PRINT_PREFERENCES FLOW_CALIBRATE=1'), then printer_save."
+                        ),
+                    )
             remote_name = f"{slice_id}.gcode"
             runner = rt.runner
             if runner is None:  # pragma: no cover - Runtime always builds one

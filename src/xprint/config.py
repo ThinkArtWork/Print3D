@@ -112,6 +112,14 @@ class PrinterSettings(BaseModel):
     slots: list[dict[str, Any]] = Field(default_factory=list)
     # textured_pei / smooth_pei / cool_plate / engineering_plate / ...
     build_plate: str = ""
+    # Optional per-printer restrictions/capabilities.  Empty build_plates means
+    # "accept whatever the slicer profile knows".
+    build_plates: list[str] = Field(default_factory=list)
+    # JSON fields a Moonraker-style printer exposes for plate detection.
+    plate_keys: list[str] = Field(default_factory=list)
+    # Vendor-specific flow/pressure-advance calibration.  All keys optional:
+    # enable_gcode/disable_gcode, factors_url, factors_key, extruder_keys.
+    flow_calibration: dict[str, Any] = Field(default_factory=dict)
     serial: str | None = None
     access_code_env: str | None = None
     username: str | None = None

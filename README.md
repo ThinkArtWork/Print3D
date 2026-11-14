@@ -355,7 +355,43 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 - 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功；随后 `send(start=true)` 真实打印完成：`complete`，25/25 层，325 s，662 mm 耗材。
 - 已知限制：Snapmaker Orca 2.4.1 的 CLI 加载 U1 预设会段错误（GUI 不受影响）；当前用 upstream OrcaSlicer 2.5.0 + 扁平化 U1 预设（去掉 `inherits`，并把 `{if chamber_cooling_mode}` 这类厂商占位符展开成固定分支）绕开。预设放在工作区 `profiles/u1/`，目标配置指向它们。
 - 发送前检查：slice 必须成功、G-code 存在、打印机 idle、`printer_model` 与切片目标一致，任一不满足直接拒绝。
-- 自动流量校准：`send(..., flow_calibrate=True)` 会在启动前发送 `SET_PRINT_PREFERENCES FLOW_CALIBRATE=1`，打印机在 `PRINT_START` 里执行自己的 `SM_PRINT_FLOW_CALIBRATE`（压力提前/流量 K），适合 Snapmaker U1。该命令只能在**空闲**状态设置，打印中会被固件拒绝；不支持该命令的适配器会直接报错。
+- 自动流量校准：`send(..., flow_calibrate=True)` 会在启动前执行打印机配置里的 `flow_calibration.enable_gcode`。Snapmaker U1 配的是 `SET_PRINT_PREFERENCES FLOW_CALIBRATE=1`，打印机随后在 `PRINT_START` 执行 `SM_PRINT_FLOW_CALIBRATE`；通用 Klipper 可换成自己的宏（如 `FLOW_CALIBRATE ENABLE=1`）。该命令只能在**空闲**状态设置，打印中会被固件拒绝；未配置或适配器不支持 G-code 命令时会给出明确错误，不会静默跳过。
+
+#### 多厂家 / 多型号适配
+
+切片参数（`flow_ratio`、`pressure_advance`、`build_plate`、`slots` 匹配）本身与打印机品牌无关，都是写进 Orca 预设的通用键；真正与厂商相关的是“能不能发校准命令、能不能读校准系数、能不能自动识别板型”。这三件事由打印机的 `capabilities` 配置决定，而不是写死在适配器里：
+
+```json
+{
+  "id": "voron",
+  "adapter": "moonraker",
+  "base_url": "http://voron.local:7125",
+  "model": "Voron 2.4",
+  "build_plate": "textured_pei",
+  "build_plates": ["textured_pei", "cool_plate"],
+  "plate_keys": ["bed_type"],
+  "flow_calibration": {
+    "enable_gcode": "FLOW_CALIBRATE ENABLE=1",
+    "disable_gcode": "FLOW_CALIBRATE ENABLE=0",
+    "factors_url": "/server/files/config/calibration.json",
+    "factors_key": "pa.factor",
+    "extruder_keys": ["extruder", "extruder1"]
+  }
+}
+```
+
+| 适配器 / 机型 | 切片参数 | 槽位匹配 | 板型选择 | 自动读板型 | 校准命令 | 读校准系数 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Moonraker / Klipper（含 U1） | ✅ | ✅（配置 `slots`） | ✅（`build_plates` 限制） | 视固件字段（`plate_keys`）；U1 无 | ✅ 任意 G-code（`enable_gcode`） | ✅ 任意 JSON（`factors_url`） |
+| OctoPrint / Klipper | ✅ | ✅ | ✅ | 视固件字段 | ✅ 转 `/api/printer/command` | 需自备 HTTP 可读的 JSON |
+| Bambu LAN | ✅ | ✅（按工具头） | ✅（Orca 预设） | 未实现 | 暂未实现（Bambu 自有校准流程不在 LAN API 中） | 暂未实现 |
+| PrusaLink | ✅ | ✅ | ✅ | 未实现 | ❌（无公开 G-code 端点） | ❌ |
+| 声明式 HTTP | ✅ | ✅ | ✅ | 未实现 | 需适配器扩展 | 需适配器扩展 |
+
+- `printer_status` 的 `capabilities` 会直接报告 `flow_calibration.supported` / `factors_configured`、`build_plates`、`build_plate_detection`；`printer_list` 报告配置层面的 `flow_calibration_configured`，不需要联网。
+- `build_plates` 为空表示接受切片器认识的所有板型；非空时 `slice_plan`/`slice_run` 会拒绝不在列表里的板型，并列出支持的取值。
+- 板型 id 统一用 XPrint 的 `textured_pei` / `smooth_pei` / `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`，由切片适配器映射到 Orca 的 `curr_bed_type`；换切片器时只需在切片适配器里换映射，不改工具参数。
+- 自动读板型依赖固件暴露字段；目前只有厂商返回 `build_plate` / `bed_type` 等 JSON 字段时才会生效，U1 不返回，所以仍需首次手选。
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
 - 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`；PrusaLink 与声明式 `http` 由单元测试覆盖（Digest 重试、上传头、启动/取消路径、状态映射），尚无对应真机。
 
