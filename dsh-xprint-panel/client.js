@@ -16,12 +16,11 @@ window.__ModuleLoader__.load({
     const NS = 'xprint'
     const DIRECT_ENDPOINT = 'http://127.0.0.1:8765/mcp'
     // The Host half proxies MCP under the DSH origin. That keeps the panel
-    // working when the page has a CSP connect-src or a non-HTTP origin, and it
-    // avoids depending on a fixed port from the browser side.
-    const PROXY_ENDPOINT = /^https?:$/.test(window.location.protocol)
-      ? `${window.location.origin}/api/xprint/mcp`
-      : null
-    let endpoint = PROXY_ENDPOINT || DIRECT_ENDPOINT
+    // working when the page has a CSP connect-src or a non-HTTP origin (the
+    // desktop shell uses dsh-app://app), and avoids depending on a fixed port.
+    // A relative URL resolves against whatever origin served this page.
+    const PROXY_ENDPOINT = '/api/xprint/mcp'
+    let endpoint = PROXY_ENDPOINT
     const PROTOCOL = '2025-06-18'
     const PANEL_ID = 'xprint'
 
@@ -66,6 +65,8 @@ window.__ModuleLoader__.load({
       refreshFailed: 'Could not refresh',
       queued: 'queued',
       failed: 'failed',
+      crash: 'XPrint panel crashed',
+      crashBody: 'The panel failed to render. Open developer tools to see the full error.',
     }
 
     const zh = {
@@ -109,6 +110,8 @@ window.__ModuleLoader__.load({
       refreshFailed: '刷新失败',
       queued: '排队',
       failed: '失败',
+      crash: 'XPrint 面板出错',
+      crashBody: '面板渲染失败，打开开发者工具可以看到完整错误。',
     }
 
     let sessionId = null
@@ -445,6 +448,18 @@ window.__ModuleLoader__.load({
       },
       emptyTitle: { color: 'var(--dsw-alias-label-secondary)', fontSize: 14, fontWeight: 500 },
       emptyBody: { fontSize: 12, lineHeight: '18px', maxWidth: 380 },
+      boundary: { padding: 32, display: 'flex', flexDirection: 'column', gap: 10 },
+      errorBox: {
+        margin: 0,
+        padding: 12,
+        borderRadius: 8,
+        background: 'var(--dsw-alias-bg-layer-1)',
+        color: 'var(--dsw-alias-state-error-primary)',
+        fontSize: 11,
+        whiteSpace: 'pre-wrap',
+        overflow: 'auto',
+        maxWidth: 640,
+      },
       detailHead: { display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 16 },
       detailTitle: { fontSize: 18, fontWeight: 600, lineHeight: '24px' },
       detailId: {
@@ -565,6 +580,31 @@ window.__ModuleLoader__.load({
         .xp-main { min-height: 0; }
       }
     `
+
+    class PanelBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+      static getDerivedStateFromError(error) {
+        return { error }
+      }
+      render() {
+        if (this.state.error) {
+          const message = this.state.error && this.state.error.message
+            ? this.state.error.message
+            : String(this.state.error)
+          return h(
+            'div',
+            { style: styles.boundary },
+            h('div', { style: styles.emptyTitle }, this.props.t('crash')),
+            h('div', { style: styles.emptyBody }, this.props.t('crashBody')),
+            h('pre', { style: styles.errorBox }, message),
+          )
+        }
+        return this.props.children
+      }
+    }
 
     function XPrintPanel({ t }) {
       const [phase, setPhase] = useState('connecting')
@@ -722,7 +762,7 @@ window.__ModuleLoader__.load({
               h('div', { style: styles.offlineBody }, t('offlineBody')),
               h('code', { style: styles.code }, 'xprint serve --http --host 127.0.0.1 --port 8765'),
               h('div', { style: styles.offlineBody },
-                t('endpoint'), ': ', h('span', { style: styles.mono }, ENDPOINT)),
+                t('endpoint'), ': ', h('span', { style: styles.mono }, endpoint)),
               error ? h('div', { style: styles.errorText }, error) : null,
               h('button', {
                 type: 'button',
@@ -898,7 +938,7 @@ window.__ModuleLoader__.load({
           name: 'main',
           key: PANEL_ID,
           locale: NS,
-        }, () => h(XPrintPanel, { t })))
+        }, () => h(PanelBoundary, { t }, h(XPrintPanel, { t }))))
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
           name: 'sidebar.panellist',
           id: PANEL_ID,

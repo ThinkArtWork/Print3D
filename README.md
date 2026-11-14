@@ -87,7 +87,7 @@ plugin_manager install_bundle target: /absolute/path/to/XPrint/dsh-xprint-panel
         cwd: /Users/macadmin/XPrint
 ```
 
-**安全边界**：浏览器半优先走 Host 半注册的同源代理 `/api/xprint/mcp`，不依赖 8765 的跨源可达性；只有 Host 半版本过旧（代理返回非 JSON 404）才回退直连。8765 只绑定回环地址；`serve()` 的 CORS 只放行 loopback origin（`127.0.0.1`/`localhost`/`[::1]` 的任意端口），**不放宽到 `null`/`file://`**，避免任意本地 HTML 借浏览器调用写工具。浏览器半不保存任何凭据；如果 `secrets.json` 配了 `server.token`（或运行环境带 `XPRINT_TOKEN`），面板会显示离线——此时应改用会话里的 stdio 工具，或临时去掉 token。8765 与 stdio 服务共用工作区，但**没有跨进程锁**，两个服务同时写同一资产仍以最后写入为准。
+**安全边界**：浏览器半用相对路径 `/api/xprint/mcp` 走 Host 半注册的同源代理（桌面壳 origin 是 `dsh-app://app`，直连 8765 会被 CORS 拦），只有 Host 半版本过旧（代理返回非 JSON 404/405/501）才回退直连。8765 只绑定回环地址；`serve()` 的 CORS 只放行 loopback origin（`127.0.0.1`/`localhost`/`[::1]` 的任意端口），**不放宽到 `null`/`file://`**，避免任意本地 HTML 借浏览器调用写工具。浏览器半不保存任何凭据；如果 `secrets.json` 配了 `server.token`（或运行环境带 `XPRINT_TOKEN`），面板会显示离线——此时应改用会话里的 stdio 工具，或临时去掉 token。8765 与 stdio 服务共用工作区，但**没有跨进程锁**，两个服务同时写同一资产仍以最后写入为准。
 
 图标没出现时：先在 **Plugins** 页确认 `@local/xprint-panel` 已启用，再刷新页面；仍连不上就检查 `lsof -nP -iTCP:8765 -sTCP:LISTEN` 是否有进程、以及 `cordis.patch.yml` 里的 `command` 是否存在。细节见 [dsh-xprint-panel/README.md](dsh-xprint-panel/README.md)，设计说明见 [DESIGN §3.3](docs/DESIGN.md)。
 

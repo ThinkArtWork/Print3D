@@ -39,8 +39,9 @@ plugin_manager install_bundle target: /Users/macadmin/XPrint/dsh-xprint-panel
 
 - 面板是只读的：写资产、切片、发送打印仍然走会话里的工具和 `confirm` 字符串。
 - Host 半把 MCP 反向代理到 DSH 同源的 `/api/xprint/mcp`，因此浏览器不依赖
-  CORS、CSP `connect-src` 或固定端口；该路由在 DSH 的认证栅栏内，只服务已登录
-  页面。直连 8765 只是 Host 半版本过旧时的回退。
+  CORS、CSP `connect-src` 或固定端口；桌面壳的页面 origin 是 `dsh-app://app`，
+  相对路径同样走这个代理。该路由在 DSH 的认证栅栏内，只服务已登录页面。直连
+  8765 只是 Host 半版本过旧或静态页面时的回退。
 - 8765 端口只绑定 `127.0.0.1`；CORS 只放行 loopback origin（`127.0.0.1` /
   `localhost` / `[::1]`），不放宽到 `null`/`file://`。Host 半会删掉继承来的
   `XPRINT_TOKEN`，因为浏览器半没有凭证。要跨机器访问请自行加认证，不要直接
@@ -50,6 +51,8 @@ plugin_manager install_bundle target: /Users/macadmin/XPrint/dsh-xprint-panel
   stdio/`mcp-manager` 路径。
 - 如果 8765 已被占用，Host 半的 uvicorn 会退出，面板连已有的服务；这适合手动
   调试，但两个进程的工作区必须一致。
+- 面板黑屏时：先看开发者工具 Console 是否有 `slot entry crashed`；Host 半已给
+  面板加 `PanelBoundary`，正常会显示“XPrint 面板出错”而不是纯黑。
 - 面板一直停在“正在启动”时：先确认 `lsof -nP -iTCP:8765 -sTCP:LISTEN` 有进程，
   再请求一次 `curl -i -X POST http://127.0.0.1:<DSH 端口>/api/xprint/mcp`；返回
   401 表示代理路由已注册（未带登录 cookie），404 表示 Host 半还是旧版本，需要
