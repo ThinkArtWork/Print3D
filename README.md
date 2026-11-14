@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint 发送，以及 **24 个工具**；已在 Snapmaker U1 真机上完成切片与上传验证（含 Blender bpy、本地生成器、云端生成三条额外路径）。
+> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **24 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。
 
 ## 文档
 
@@ -222,7 +222,7 @@ slice_inspect(slice_id)                  → 层数、预计时间、耗材、pr
 - 实测（OrcaSlicer 2.5.0 + Bambu A1，0.16 mm）：20×20×10 带孔方块 → 62 层、16m01s、2.31 g、332 KB G-code。
 - 已知限制：Snapmaker Orca 01.10.01.50 无头加载 U1 预设即段错误（连 `--export-settings` 也崩），U1 目标暂不可用；厂商修 CLI 后只需加一条 target 配置。
 
-### 路径七：发送到打印机（Moonraker / OctoPrint）
+### 路径七：发送到打印机（Moonraker / OctoPrint / Bambu LAN）
 
 切片完成后，XPrint 通过打印机自己的 HTTP API 上传并启动，不经过厂商云。
 
@@ -252,9 +252,9 @@ send(slice_id, "u1", confirm="PRINT u1 <slice_id>")  → 上传 G-code 并启动
 printer_cancel("u1", confirm="CANCEL PRINT u1")
 ```
 
-- 适配器：Moonraker（Klipper，`/server/files/upload` + `/printer/print/start`）与 OctoPrint（`/api/files/local` + `/api/job`）。Bambu LAN（MQTT+FTPS）与厂商云未接入。
+- 适配器：Moonraker（Klipper，`/server/files/upload` + `/printer/print/start`）、OctoPrint（`/api/files/local` + `/api/job`）与 Bambu LAN（MQTT/TLS `8883` + 隐式 FTPS `990` + 3MF 封装，社区协议实现，**尚未真机验证**）。厂商云未接入。
 - 工具头：`toolheads` 支持 1–9（拓竹 X3D 类机型最多 9 个）。`send` 会读切片 G-code 里的 `T0..Tn`，实际用到的工具号超过打印机配置就拒绝上传并提示调大 `toolheads`。Snapmaker U1 是 4 头。
-- 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功。**尚未启动真实打印**（床面状态未知）。
+- 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功；随后 `send(start=true)` 真实打印完成：`complete`，25/25 层，325 s，662 mm 耗材。
 - 已知限制：Snapmaker Orca 2.4.1 的 CLI 加载 U1 预设会段错误（GUI 不受影响）；当前用 upstream OrcaSlicer 2.5.0 + 扁平化 U1 预设（去掉 `inherits`，并把 `{if chamber_cooling_mode}` 这类厂商占位符展开成固定分支）绕开。预设放在工作区 `profiles/u1/`，目标配置指向它们。
 - 发送前检查：slice 必须成功、G-code 存在、打印机 idle、`printer_model` 与切片目标一致，任一不满足直接拒绝。
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
@@ -284,7 +284,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 | `slice_inspect` | 否 | 读切片记录、G-code 元数据与 warnings |
 | `printer_list` | 否 | 配置的打印机、适配器、是否有 API key；不联网 |
 | `printer_status` | 否 | 经适配器查询实时状态、文件名、进度、温度 |
-| `printer_save` | 是 | 新增/修改打印机（config.json）；`confirm` 精确为 `SAVE PRINTER <id>` |
+| `printer_save` | 是 | 新增/修改打印机（config.json）；`confirm` 精确为 `SAVE PRINTER <id>`。`bambu_lan` 需 `serial` 与 `access_code_env` |
 | `printer_remove` | 是 | 删除打印机；`confirm` 精确为 `REMOVE PRINTER <id>` |
 | `send` | 是 | 上传切片 G-code 并启动打印（异步 job）；`confirm` 精确为 `PRINT <printer_id> <slice_id>` |
 | `printer_cancel` | 是 | 取消当前打印；`confirm` 精确为 `CANCEL PRINT <printer_id>` |
@@ -348,7 +348,7 @@ XPrint/
 | 云端文/图生 3D（Tripo/混元） | ✅ `generate_cloud` 异步任务 + 下载 + 转 STL + 预览（需配置 key） |
 | 导出模型文件 | ✅ `asset_export`（STL/STEP/脚本） |
 | 切片（G-code） | ✅ `slice_*` 四件套，外部 OrcaSlicer，异步任务 + 统计 |
-| 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert |
+| 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert；9 工具头 preflight |
 | 切片后发送打印机 | ✅ Moonraker / OctoPrint 适配器，`send`（上传+启动）与 `printer_cancel`；Snapmaker U1 真机已上传验证（未启动打印） |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。

@@ -1596,7 +1596,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         try:
             entries = []
             for entry in rt.loaded.config.printers:
-                key = rt.secrets.provider_key(entry.id, api_key_env=entry.api_key_env)
+                key_env = entry.access_code_env or entry.api_key_env
+                key = rt.secrets.provider_key(entry.id, api_key_env=key_env)
                 entries.append(
                     {
                         "id": entry.id,
@@ -1604,12 +1605,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "adapter_known": entry.adapter.lower() in PRINTER_ADAPTERS,
                         "model": entry.model,
                         "base_url": entry.base_url,
+                        "serial": entry.serial,
                         "toolheads": entry.toolheads,
                         "enabled": entry.enabled,
                         "has_key": bool(key),
-                        "key_source": rt.secrets.key_source(
-                            entry.id, api_key_env=entry.api_key_env
-                        ),
+                        "key_source": rt.secrets.key_source(entry.id, api_key_env=key_env),
                     }
                 )
             return {
@@ -1668,7 +1668,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         base_url: str = "",
         model: str = "",
         toolheads: int = 1,
+        serial: str = "",
         api_key_env: str = "",
+        access_code_env: str = "",
         enabled: bool = True,
     ) -> dict[str, Any]:
         try:
@@ -1695,14 +1697,21 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "toolheads must be between 1 and 9",
                     hint="Snapmaker U1 has 4 toolheads; a Bambu X3D-style machine can have 9.",
                 )
+            if chosen == "bambu_lan" and not serial.strip():
+                raise InvalidArgument(
+                    "bambu_lan printers need a serial",
+                    hint="Find the serial under Settings > Device on the printer (or in Bambu Studio).",
+                )
             entry = PrinterSettings(
                 id=printer_id,
                 adapter=chosen,
                 base_url=base_url.strip(),
                 model=model.strip() or None,
                 toolheads=int(toolheads),
+                serial=serial.strip() or None,
                 enabled=bool(enabled),
                 api_key_env=api_key_env.strip() or None,
+                access_code_env=access_code_env.strip() or None,
             )
             path = save_printer(rt.loaded, entry)
             return {

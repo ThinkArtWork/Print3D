@@ -381,3 +381,21 @@ def test_send_refuses_more_toolheads_than_configured(tmp_path, monkeypatch) -> N
     assert "T4" in payload["error"]["message"]
     assert "toolheads=..." in payload["error"]["hint"]
     assert fake.uploaded == []
+
+
+def test_printer_save_bambu_lan_requires_serial(tmp_path):
+    runtime = _runtime(tmp_path)
+    result = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "x1",
+            "confirm": "SAVE PRINTER x1",
+            "adapter": "bambu_lan",
+            "base_url": "http://192.168.1.50",
+            "model": "Bambu Lab X1C",
+        },
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_argument"
+    assert "serial" in result["error"]["message"]

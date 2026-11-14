@@ -1,12 +1,15 @@
-"""Printer adapters: documented HTTP APIs for status, upload, start, cancel.
+"""Printer adapters: status, upload, start and cancel.
 
-No vendor code is bundled or linked.  Only adapters with a public HTTP API are
-implemented here (Moonraker for Klipper, OctoPrint).  Bambu LAN (MQTT + FTPS)
-and vendor clouds are deliberately out of scope until their protocols can be
-implemented and tested cleanly.
+Implemented adapters:
 
-Every write action goes through an explicit ``confirm`` string in the MCP
-tools; the adapters themselves only speak HTTP.
+* ``moonraker`` - Klipper's documented HTTP API.
+* ``octoprint`` - OctoPrint's documented REST API.
+* ``bambu_lan``  - Bambu Lab LAN mode (MQTT/TLS + implicit FTPS + 3MF), see
+  :mod:`xprint.bambu`.  The protocol is community documented and unit tested
+  here, but not verified against real hardware yet.
+
+No vendor code is bundled or linked.  Every write action goes through an
+explicit ``confirm`` string in the MCP tools.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from .config import PrinterSettings, Secrets
 from .errors import AdapterUnavailable, AdapterUnknown, InvalidArgument
 
 PRINTER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
-PRINTER_ADAPTERS = ("moonraker", "octoprint")
+PRINTER_ADAPTERS = ("moonraker", "octoprint", "bambu_lan")
 DEFAULT_TIMEOUT_S = 30.0
 
 #: States in which a printer must not receive a new job.
@@ -302,16 +305,38 @@ def build_printer(
     *,
     secrets: Secrets,
     transport: httpx.BaseTransport | None = None,
-) -> _HttpPrinter:
+) -> Any:
     """Instantiate the adapter for one configured printer."""
     adapter = (printer.adapter or "").lower()
-    if adapter not in _PRINTER_CLASSES:
+    if adapter not in PRINTER_ADAPTERS:
         raise AdapterUnknown(
             f"Unknown printer adapter: {printer.adapter}",
             hint=f"Supported adapters: {', '.join(PRINTER_ADAPTERS)}",
         )
     if not printer.enabled:
         raise AdapterUnavailable(f"Printer {printer.id} is disabled")
+    if adapter == "bambu_lan":
+        from .bambu import BambuLanPrinter, parse_host
+
+        code = secrets.provider_key(
+            printer.id,
+            api_key_env=printer.access_code_env or printer.api_key_env,
+        )
+        if not code:
+            raise AdapterUnavailable(
+                f"Printer {printer.id} has no LAN access code",
+                hint=(
+                    "Store the printer's LAN access code in secrets.json under "
+                    f"providers.{printer.id}, or set {printer.access_code_env or 'XPRINT_<ID>_ACCESS_CODE'}."
+                ),
+            )
+        return BambuLanPrinter(
+            printer.id,
+            host=parse_host(printer.base_url or ""),
+            serial=printer.serial or "",
+            access_code=code,
+            timeout_s=printer.timeout_s,
+        )
     key = secrets.provider_key(printer.id, api_key_env=printer.api_key_env)
     return _PRINTER_CLASSES[adapter](
         printer.id,

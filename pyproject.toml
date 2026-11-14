@@ -25,6 +25,7 @@ dependencies = [
   "pydantic>=2.7",
   "build123d>=0.9,<1",
   "trimesh>=4",
+  "paho-mqtt>=2.1",
 ]
 
 [project.optional-dependencies]
