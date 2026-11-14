@@ -158,3 +158,33 @@ def test_build_printer_uses_configured_key() -> None:
     )
     assert isinstance(printer, MoonrakerPrinter)
     assert printer.api_key == "from-secrets"
+
+
+@respx.mock
+def test_moonraker_reads_flow_calibration_factors() -> None:
+    route = respx.get(f"{MOON}/server/files/config/snapmaker/flow_calibrator.json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "factor": {"extruder": 0.055761, "extruder1": 0.02},
+                "env": {"k_min": 0.005, "k_max": 0.065},
+            },
+        )
+    )
+    printer = MoonrakerPrinter("u1", base_url=MOON)
+    data = printer.flow_calibration()
+    assert route.called
+    assert data["source"] == "snapmaker/flow_calibrator.json"
+    assert data["factors"]["extruder"] == pytest.approx(0.055761)
+    assert data["env"]["k_max"] == pytest.approx(0.065)
+
+
+@respx.mock
+def test_moonraker_sets_flow_calibration_preference() -> None:
+    route = respx.post(f"{MOON}/printer/gcode/script").mock(
+        return_value=httpx.Response(200, json={"result": "ok"})
+    )
+    printer = MoonrakerPrinter("u1", base_url=MOON)
+    printer.set_flow_calibrate(True)
+    assert route.called
+    assert route.calls[0].request.url.params["script"] == "SET_PRINT_PREFERENCES FLOW_CALIBRATE=1"

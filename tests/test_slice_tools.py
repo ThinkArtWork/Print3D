@@ -202,6 +202,8 @@ def test_slice_plan_previews_material_and_process_options(workspace, tmp_path) -
             "infill": "gyroid",
             "infill_density": 30,
             "strength": "strong",
+            "flow_ratio": 1.03,
+            "pressure_advance": 0.0558,
         },
     )
     assert payload["ok"] is True
@@ -211,6 +213,10 @@ def test_slice_plan_previews_material_and_process_options(workspace, tmp_path) -
     assert payload["options"]["nozzle_temp"] == 240
     assert payload["options"]["bed_temp"] == 80
     assert payload["options"]["walls"] == 4
+    assert payload["options"]["flow_ratio"] == 1.03
+    assert payload["options"]["pressure_advance"] == 0.0558
+    assert payload["profile_overrides"]["filament"]["filament_flow_ratio"] == "1.03"
+    assert payload["profile_overrides"]["filament"]["pressure_advance"] == "0.0558"
     assert payload["profile_overrides"]["process"]["layer_height"] == "0.24"
     assert payload["profile_overrides"]["filament"]["temperature"] == "240"
     assert any("private copy" in item for item in payload["warnings"])

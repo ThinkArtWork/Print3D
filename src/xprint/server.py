@@ -371,6 +371,8 @@ def _slice_options(
     bed_temp: int = 0,
     nozzle_temp: int = 0,
     build_plate: str = "",
+    flow_ratio: float = 0,
+    pressure_advance: float = -1,
 ) -> SliceOptions | None:
     """Build SliceOptions from MCP arguments (0 / -1 mean "unset")."""
 
@@ -381,6 +383,10 @@ def _slice_options(
         return int(value) if value and value > 0 else None
 
     density = float(infill_density) if infill_density is not None and infill_density >= 0 else None
+    flow = float(flow_ratio) if flow_ratio and flow_ratio > 0 else None
+    advance = (
+        float(pressure_advance) if pressure_advance is not None and pressure_advance >= 0 else None
+    )
     options = SliceOptions(
         material=(material or "").strip(),
         layer_height=positive(layer_height),
@@ -392,6 +398,8 @@ def _slice_options(
         strength=(strength or "").strip(),
         bed_temp=count(bed_temp),
         nozzle_temp=count(nozzle_temp),
+        flow_ratio=flow,
+        pressure_advance=advance,
     )
     if options.resolved() == SliceOptions().resolved():
         return None
@@ -1764,9 +1772,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Dry-run a slice: resolve the target presets, report bed size and model "
             "checks, preview process/material options (material, layer_height, infill, "
             "infill_density, walls, top_shells, bottom_shells, strength, bed_temp, "
-            "nozzle_temp), optionally pinned to a printer filament slot (printer + slot: "
-            "multi-tool or AMS). Read-only: it reports the overrides and the slot material "
-            "that slice_run would use."
+            "nozzle_temp, build_plate, flow_ratio, pressure_advance), optionally pinned to "
+            "a printer filament slot (printer + slot: multi-tool or AMS). Read-only: it "
+            "reports the overrides and the slot material that slice_run would use."
         ),
     )
     def slice_plan(
@@ -1786,6 +1794,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         strength: str = "",
         bed_temp: int = 0,
         nozzle_temp: int = 0,
+        flow_ratio: float = 0,
+        pressure_advance: float = -1,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -1801,6 +1811,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 bed_temp=bed_temp,
                 nozzle_temp=nozzle_temp,
                 build_plate=build_plate,
+                flow_ratio=flow_ratio,
+                pressure_advance=pressure_advance,
             )
             options, slot_info = _apply_slot(
                 rt, options, printer_id=printer, slot=slot, build_plate=build_plate
@@ -1912,9 +1924,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Slice a built revision for a configured target with the external "
             "OrcaSlicer CLI, optionally with process/material options (material implies "
             "nozzle/bed temperatures; layer_height, infill, infill_density, walls, "
-            "top_shells, bottom_shells, strength override the process preset; printer + slot "
-            "pin the G-code to a filament slot and take its material/colour). Runs as an "
-            "async job (poll job_status). confirm must be exactly 'SLICE <asset_id> <target>'."
+            "top_shells, bottom_shells, strength override the process preset; flow_ratio and "
+            "pressure_advance override the filament flow/PA; build_plate picks the plate; "
+            "printer + slot pin the G-code to a filament slot and take its material/colour). "
+            "Runs as an async job (poll job_status). confirm must be exactly "
+            "'SLICE <asset_id> <target>'."
         ),
     )
     def slice_run(
@@ -1936,6 +1950,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         strength: str = "",
         bed_temp: int = 0,
         nozzle_temp: int = 0,
+        flow_ratio: float = 0,
+        pressure_advance: float = -1,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -1957,6 +1973,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 bed_temp=bed_temp,
                 nozzle_temp=nozzle_temp,
                 build_plate=build_plate,
+                flow_ratio=flow_ratio,
+                pressure_advance=pressure_advance,
             )
             options, slot_info = _apply_slot(
                 rt, options, printer_id=printer, slot=slot, build_plate=build_plate
@@ -2142,7 +2160,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="printer_status",
         description=(
-            "Query one printer's live state (state, filename, progress, temperatures) "
+            "Query one printer's live state (state, filename, progress, temperatures), "
+            "configured build plate and any printer-stored flow calibration factors, "
             "through its adapter. Read-only."
         ),
     )
@@ -2152,6 +2171,13 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             entry = _printer_entry(rt, printer_id)
             adapter = build_printer(entry, secrets=rt.secrets)
             state = adapter.status()
+            calibration = None
+            reader = getattr(adapter, "flow_calibration", None)
+            if callable(reader):
+                try:
+                    calibration = reader()
+                except XPrintError:
+                    calibration = None
             return {
                 "ok": True,
                 "writes_performed": False,
@@ -2169,6 +2195,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "build_plate_source": (
                     "config" if entry.build_plate else ("firmware" if state.build_plate else None)
                 ),
+                "flow_calibration": calibration,
             }
         except XPrintError as exc:
             return tool_error(exc)
@@ -2295,8 +2322,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         description=(
             "Upload a successful slice's G-code to a printer and, by default, start "
             "the print. The printer must be idle and its model must match the slice "
-            "target. confirm must be exactly 'PRINT <printer_id> <slice_id>'. Runs as "
-            "an async job (poll job_status)."
+            "target. flow_calibrate=True asks a Moonraker printer to run its own flow/"
+            "pressure-advance calibration at print start (SET_PRINT_PREFERENCES "
+            "FLOW_CALIBRATE=1). confirm must be exactly 'PRINT <printer_id> <slice_id>'. "
+            "Runs as an async job (poll job_status)."
         ),
     )
     def send(
@@ -2304,6 +2333,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         printer_id: str,
         confirm: str,
         start: bool = True,
+        flow_calibrate: bool = False,
     ) -> dict[str, Any]:
         try:
             validate_slice_id(slice_id)
@@ -2403,12 +2433,20 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Printer {printer_id} is busy ({state.state})",
                     hint="Wait for it to finish, or call printer_cancel first.",
                 )
+            if flow_calibrate and not hasattr(adapter, "set_flow_calibrate"):
+                raise InvalidArgument(
+                    f"flow_calibrate is not supported by the {entry.adapter!r} adapter",
+                    hint="Use a Moonraker printer, or slice with pressure_advance manually.",
+                )
             remote_name = f"{slice_id}.gcode"
             runner = rt.runner
             if runner is None:  # pragma: no cover - Runtime always builds one
                 raise ConfigError("No job runner is available")
 
             def work(job_id: str) -> dict[str, Any]:
+                if flow_calibrate:
+                    rt.store.set_progress(job_id, 0.1, message="enabling flow calibration")
+                    adapter.set_flow_calibrate(True)
                 rt.store.set_progress(job_id, 0.2, message="uploading G-code")
                 uploaded = adapter.upload(gcode, name=remote_name)
                 rt.store.set_progress(job_id, 0.7, message="starting print")
@@ -2419,6 +2457,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "slice_id": slice_id,
                     "filename": uploaded,
                     "started": bool(start),
+                    "flow_calibrate": bool(flow_calibrate),
                     "printer_state_before": state.to_dict(),
                     "slot_checks": slot_checks,
                     "material_warnings": material_warnings,
@@ -2433,6 +2472,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "printer_id": printer_id,
                     "slice_id": slice_id,
                     "start": bool(start),
+                    "flow_calibrate": bool(flow_calibrate),
                     "slot_checks": slot_checks,
                 },
                 provider=printer_id,
@@ -2445,6 +2485,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "slice_id": slice_id,
                 "filename": remote_name,
                 "started": bool(start),
+                "flow_calibrate": bool(flow_calibrate),
                 "printer_state": state.to_dict(),
                 "slot_checks": slot_checks,
                 "material_warnings": material_warnings,

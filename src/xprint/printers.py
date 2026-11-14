@@ -270,6 +270,22 @@ class MoonrakerPrinter(_HttpPrinter):
             raw={"print_stats": stats, "print_task_config": task},
         )
 
+    def flow_calibration(self) -> dict[str, Any]:
+        """Read the printer's calibrated pressure-advance factors (Snapmaker)."""
+        payload = self._json(
+            self._request("GET", "/server/files/config/snapmaker/flow_calibrator.json")
+        )
+        factors = payload.get("factor") or {}
+        return {
+            "source": "snapmaker/flow_calibrator.json",
+            "factors": {
+                str(key): float(value)
+                for key, value in factors.items()
+                if isinstance(value, (int, float))
+            },
+            "env": payload.get("env") or {},
+        }
+
     def upload(self, path: Path, *, name: str) -> str:
         response = self._request(
             "POST",
@@ -280,6 +296,11 @@ class MoonrakerPrinter(_HttpPrinter):
         payload = self._json(response)
         item = payload.get("item") or {}
         return str(item.get("path") or name)
+
+    def set_flow_calibrate(self, enabled: bool) -> None:
+        """Ask the printer to run its own flow/pressure-advance calibration at start."""
+        script = f"SET_PRINT_PREFERENCES FLOW_CALIBRATE={1 if enabled else 0}"
+        self._request("POST", "/printer/gcode/script", params={"script": script})
 
     def start(self, filename: str) -> None:
         self._request("POST", "/printer/print/start", params={"filename": filename})

@@ -276,8 +276,11 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
 | `strength` | `light` / `normal` / `strong`，映射墙数 2/3/4、顶/底层 3/4/5；也可单独传 `walls`、`top_shells`、`bottom_shells` |
 | `bed_temp` / `nozzle_temp` | 显式覆盖材料默认温度 |
 | `build_plate` | 打印板类型：`textured_pei`（默认纹理 PEI）/ `smooth_pei`（光面 PEI，Orca 里叫 High Temp Plate）/ `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`；选择后 Orca 用对应的热床温度键，温度按材料自动调整 |
+| `flow_ratio` | 挤出流量倍率 0.5–1.5，写入 `filament_flow_ratio`；预设 Generic PLA 是 0.98，Matte/高速料可试 1.00–1.05 |
+| `pressure_advance` | 压力提前 K 值 0–0.2，写入 `pressure_advance` 并启用；可先用 `printer_status` 读取打印机已校准的值（U1 的 `flow_calibration.factors.extruder`） |
 | `printer` + `slot` | 绑定某台打印机的耗材槽（多喷头按工具头、单喷头 AMS 按槽位）：自动取该槽的材质/颜色，材质冲突直接拒绝；`slot=1` 表示 G-code 用 `T1` |
 
+- 流量：`flow_ratio` 直接改 `filament_flow_ratio`；`pressure_advance` 改 `pressure_advance` 并置 `enable_pressure_advance=1`。`printer_status` 会尽量读取打印机已存的校准系数（Snapmaker 的 `flow_calibrator.json`，按工具头给出 K 值），可把它作为 `pressure_advance` 传入。
 - 打印板温度：`textured_pei` / `smooth_pei` 按材料温度；`cool_plate`、`textured_cool` 各降 15 °C，`engineering_plate` 升 10 °C，`supertack` 降 5 °C。对应到 Orca 的 `curr_bed_type` 和 `*_plate_temp` 键，不再把所有板型的温度键写成同一个值。
 - `overrides` 与上述参数通过复制 vendor 预设到私有 datadir、改写 process/filament JSON 实现；用户安装的 profile 不动。独立扁平 profile（如 U1）则复制到本次切片工作目录的 `profiles/` 后改写。
 - `slice_plan` 只预览 `profile_overrides`，不写文件；`slice_run` 的 `slice_inspect` 记录里保留本次 `options`。
@@ -317,7 +320,8 @@ printer_list()                                      → 配置了哪些打印机
 printer_status("u1")                                → 实时状态 / 文件名 / 进度 / 温度
 printer_save("u1", confirm="SAVE PRINTER u1", ...)  → 新增或修改（按 id upsert）
 printer_remove("u1", confirm="REMOVE PRINTER u1")
-send(slice_id, "u1", confirm="PRINT u1 <slice_id>")  → 上传 G-code 并启动（异步 job）
+send(slice_id, "u1", confirm="PRINT u1 <slice_id>", flow_calibrate=True)
+                                                     → 上传 G-code 并启动；先让打印机自校准流量
 printer_cancel("u1", confirm="CANCEL PRINT u1")
 ```
 
@@ -351,6 +355,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 - 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功；随后 `send(start=true)` 真实打印完成：`complete`，25/25 层，325 s，662 mm 耗材。
 - 已知限制：Snapmaker Orca 2.4.1 的 CLI 加载 U1 预设会段错误（GUI 不受影响）；当前用 upstream OrcaSlicer 2.5.0 + 扁平化 U1 预设（去掉 `inherits`，并把 `{if chamber_cooling_mode}` 这类厂商占位符展开成固定分支）绕开。预设放在工作区 `profiles/u1/`，目标配置指向它们。
 - 发送前检查：slice 必须成功、G-code 存在、打印机 idle、`printer_model` 与切片目标一致，任一不满足直接拒绝。
+- 自动流量校准：`send(..., flow_calibrate=True)` 会在启动前发送 `SET_PRINT_PREFERENCES FLOW_CALIBRATE=1`，打印机在 `PRINT_START` 里执行自己的 `SM_PRINT_FLOW_CALIBRATE`（压力提前/流量 K），适合 Snapmaker U1。该命令只能在**空闲**状态设置，打印中会被固件拒绝；不支持该命令的适配器会直接报错。
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
 - 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`；PrusaLink 与声明式 `http` 由单元测试覆盖（Digest 重试、上传头、启动/取消路径、状态映射），尚无对应真机。
 

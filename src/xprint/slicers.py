@@ -180,6 +180,8 @@ class SliceOptions:
     nozzle_temp: int | None = None
     toolhead: int = 0
     build_plate: str = ""
+    flow_ratio: float | None = None
+    pressure_advance: float | None = None
 
     def resolved(self) -> dict[str, Any]:
         material = self.material.strip().upper()
@@ -240,6 +242,12 @@ class SliceOptions:
             raise InvalidArgument("top_shells must be between 1 and 20")
         if bottom is not None and not 1 <= int(bottom) <= 20:
             raise InvalidArgument("bottom_shells must be between 1 and 20")
+        flow_ratio = self.flow_ratio
+        if flow_ratio is not None and not 0.5 <= float(flow_ratio) <= 1.5:
+            raise InvalidArgument("flow_ratio must be between 0.5 and 1.5")
+        pressure_advance = self.pressure_advance
+        if pressure_advance is not None and not 0.0 <= float(pressure_advance) <= 0.2:
+            raise InvalidArgument("pressure_advance must be between 0 and 0.2")
         if not 0 <= int(self.toolhead) <= 8:
             raise InvalidArgument("toolhead must be between 0 and 8")
 
@@ -256,6 +264,8 @@ class SliceOptions:
             "nozzle_temp": int(nozzle) if nozzle is not None else None,
             "toolhead": int(self.toolhead),
             "build_plate": plate or None,
+            "flow_ratio": float(flow_ratio) if flow_ratio is not None else None,
+            "pressure_advance": (float(pressure_advance) if pressure_advance is not None else None),
         }
 
     def process_overrides(self) -> dict[str, str]:
@@ -293,6 +303,13 @@ class SliceOptions:
                     "temperature": nozzle,
                     "first_layer_temperature": nozzle,
                 }
+            )
+        if data["flow_ratio"] is not None:
+            overrides["filament_flow_ratio"] = f"{data['flow_ratio']:.3f}".rstrip("0").rstrip(".")
+        if data["pressure_advance"] is not None:
+            overrides["enable_pressure_advance"] = "1"
+            overrides["pressure_advance"] = f"{data['pressure_advance']:.4f}".rstrip("0").rstrip(
+                "."
             )
         if data["bed_temp"] is not None:
             bed = str(data["bed_temp"])

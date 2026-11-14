@@ -67,6 +67,7 @@ class FakePrinter:
         self.uploaded: list[tuple[str, bytes]] = []
         self.started: list[str] = []
         self.cancelled = 0
+        self.flow_calibrate: list[bool] = []
 
     def status(self) -> PrinterState:
         return PrinterState(online=True, state=self.state, bed_temp=20.0)
@@ -76,6 +77,9 @@ class FakePrinter:
             raise RuntimeError("upload exploded")
         self.uploaded.append((name, path.read_bytes()))
         return name
+
+    def set_flow_calibrate(self, enabled: bool) -> None:
+        self.flow_calibrate.append(bool(enabled))
 
     def start(self, filename: str) -> None:
         self.started.append(filename)
@@ -554,3 +558,28 @@ def test_printer_save_normalises_the_build_plate(workspace, tmp_path) -> None:
     )
     assert unknown["ok"] is False
     assert "Unknown build plate" in unknown["error"]["message"]
+
+
+def test_send_enables_printer_flow_calibration(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [{"id": "u1", "adapter": "moonraker", "base_url": "http://printer.local:7125"}],
+    )
+    fake = FakePrinter()
+    monkeypatch.setattr("xprint.server.build_printer", lambda *a, **k: fake)
+    slice_id = _fake_slice(runtime.workspace)
+    sent = _call(
+        runtime,
+        "send",
+        {
+            "slice_id": slice_id,
+            "printer_id": "u1",
+            "confirm": f"PRINT u1 {slice_id}",
+            "flow_calibrate": True,
+        },
+    )
+    assert sent["ok"] is True
+    finished = _wait(runtime, sent["job_id"])
+    assert finished["job"]["state"] == "succeeded"
+    assert fake.flow_calibrate == [True]
+    assert fake.started == [f"{slice_id}.gcode"]

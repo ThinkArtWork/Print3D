@@ -426,3 +426,19 @@ def test_build_plate_selects_one_orca_bed_key() -> None:
 
     with pytest.raises(InvalidArgument, match="Unknown build plate"):
         SliceOptions(material="PLA", build_plate="cardboard").resolved()
+
+
+def test_slice_options_apply_flow_and_pressure_advance() -> None:
+    options = SliceOptions(material="PLA", flow_ratio=1.03, pressure_advance=0.0558)
+    resolved = options.resolved()
+    assert resolved["flow_ratio"] == 1.03
+    assert resolved["pressure_advance"] == 0.0558
+    filament = options.filament_overrides()
+    assert filament["filament_flow_ratio"] == "1.03"
+    assert filament["enable_pressure_advance"] == "1"
+    assert filament["pressure_advance"] == "0.0558"
+
+    with pytest.raises(InvalidArgument):
+        SliceOptions(flow_ratio=2).resolved()
+    with pytest.raises(InvalidArgument):
+        SliceOptions(pressure_advance=0.5).resolved()
