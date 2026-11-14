@@ -62,7 +62,7 @@
   }
   .sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
   .actions { margin-left: auto; display: flex; gap: 8px; }
-  button {
+  button, a.btn {
     appearance: none;
     border: 1px solid var(--line);
     background: rgba(255, 255, 255, 0.045);
@@ -74,9 +74,11 @@
     cursor: pointer;
     transition: background 120ms ease, border-color 120ms ease;
   }
-  button:hover { background: rgba(255, 255, 255, 0.10); border-color: rgba(255,255,255,0.18); }
-  button:active { background: rgba(255, 255, 255, 0.15); }
-  button.on { border-color: rgba(232, 132, 90, 0.55); color: var(--accent); }
+  button:hover, a.btn:hover { background: rgba(255, 255, 255, 0.10); border-color: rgba(255,255,255,0.18); }
+  button:active, a.btn:active { background: rgba(255, 255, 255, 0.15); }
+  button.on, a.btn.on { border-color: rgba(232, 132, 90, 0.55); color: var(--accent); }
+  a.btn { text-decoration: none; color: var(--text); display: inline-flex; align-items: center; }
+  .exportmsg { font-size: 11px; color: var(--muted); margin-left: 4px; }
   select {
     appearance: none;
     -webkit-appearance: none;
@@ -178,7 +180,8 @@
       <button id="reset" type="button" title="恢复初始视角">复位</button>
       <button id="spin" type="button" title="自动缓慢旋转">自旋</button>
       <button id="shot" type="button" title="保存当前视角为 PNG">截图</button>
-      <button id="export" type="button" title="导出当前版本的 STL">导出 STL</button>
+      <a id="export" class="btn" download title="导出当前版本的 STL">导出 STL</a>
+      <span id="exportMsg" class="exportmsg" aria-live="polite"></span>
     </div>
   </header>
   <div class="hud bottom">
@@ -342,6 +345,12 @@
     renderStats(entry);
     renderSubtitle(entry);
     if (revSel.value !== entry.revision) revSel.value = entry.revision;
+    const exportLink = document.getElementById("export");
+    if (exportLink) {
+      exportLink.href = entry.stl || (entry.revision + "/model.stl");
+      exportLink.download = (META.name || "model") + "-" + entry.revision + ".stl";
+      exportLink.title = "下载 " + entry.revision + " 的 STL";
+    }
   }
 
   function eye() {
@@ -476,42 +485,18 @@
     spin = !spin;
     event.currentTarget.classList.toggle("on", spin);
   });
-  document.getElementById("export").addEventListener("click", () => {
-    if (!currentPos) return;
-    const count = Math.floor(currentPos.length / 9);
-    const buffer = new ArrayBuffer(84 + count * 50);
-    const view = new DataView(buffer);
-    const header = "XPrint " + (META.name || "model") + " " + REVS[current].revision;
-    for (let i = 0; i < 80; i += 1) {
-      view.setUint8(i, i < header.length ? header.charCodeAt(i) : 0);
+  document.getElementById("export").addEventListener("click", (event) => {
+    const msg = document.getElementById("exportMsg");
+    const link = document.getElementById("export");
+    if (!link.getAttribute("href")) {
+      if (msg) msg.textContent = "当前版本没有可下载的 STL";
+      event.preventDefault();
+      return;
     }
-    view.setUint32(80, count, true);
-    let offset = 84;
-    const ax = [0, 0, 0], bx = [0, 0, 0], nx = [0, 0, 0];
-    for (let t = 0; t < count; t += 1) {
-      const base = t * 9;
-      for (let k = 0; k < 3; k += 1) {
-        ax[k] = currentPos[base + 3 + k] - currentPos[base + k];
-        bx[k] = currentPos[base + 6 + k] - currentPos[base + k];
-      }
-      nx[0] = ax[1] * bx[2] - ax[2] * bx[1];
-      nx[1] = ax[2] * bx[0] - ax[0] * bx[2];
-      nx[2] = ax[0] * bx[1] - ax[1] * bx[0];
-      const len = Math.hypot(nx[0], nx[1], nx[2]) || 1;
-      for (let k = 0; k < 3; k += 1) view.setFloat32(offset + k * 4, nx[k] / len, true);
-      offset += 12;
-      for (let v = 0; v < 9; v += 1) {
-        view.setFloat32(offset, currentPos[base + v], true);
-        offset += 4;
-      }
-      view.setUint16(offset, 0, true);
-      offset += 2;
+    if (msg) {
+      msg.textContent = "正在下载 " + link.download;
+      setTimeout(() => { msg.textContent = ""; }, 5000);
     }
-    const link = document.createElement("a");
-    link.download = (META.name || "model") + "-" + REVS[current].revision + ".stl";
-    link.href = URL.createObjectURL(new Blob([buffer], { type: "model/stl" }));
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 4000);
   });
 
   document.getElementById("shot").addEventListener("click", () => {

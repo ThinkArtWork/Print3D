@@ -57,6 +57,7 @@ def _mesh_entry(
     label: str = "",
     created_at: str = "",
     volume_mm3: float | None = None,
+    stl: str = "model.stl",
 ) -> dict:
     """Describe one mesh as an embeddable revision entry."""
 
@@ -81,6 +82,7 @@ def _mesh_entry(
         "volume_cm3": round(volume / 1000.0, 3),
         "pos": _encode(triangles.reshape(-1)),
         "nrm": _encode(normals.reshape(-1)),
+        "stl": stl,
     }
 
 
@@ -157,6 +159,7 @@ def entry_from_stl(
     label: str = "",
     created_at: str = "",
     volume_mm3: float | None = None,
+    stl: str = "model.stl",
 ) -> dict:
     """Load one revision's STL and turn it into a viewer entry."""
 
@@ -167,6 +170,7 @@ def entry_from_stl(
         label=label,
         created_at=created_at,
         volume_mm3=volume_mm3,
+        stl=stl,
     )
 
 
@@ -204,6 +208,8 @@ def write_collection_viewer(
 ) -> dict:
     """Write a combined, version-switchable viewer into ``directory``."""
 
+    for entry in entries:
+        entry["stl"] = f"{entry['revision']}/model.stl"
     html = collection_html(
         entries,
         title=title,

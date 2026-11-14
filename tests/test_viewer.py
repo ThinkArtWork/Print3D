@@ -143,7 +143,9 @@ def test_collection_viewer_embeds_every_revision_in_one_file(tmp_path) -> None:
     target = tmp_path / "asset" / "viewer.html"
     assert written["path"] == target
     assert target.is_file()
-    assert '"revision": "v002"' in target.read_text(encoding="utf-8")
+    body = target.read_text(encoding="utf-8")
+    assert '"revision": "v002"' in body
+    assert '"stl": "v002/model.stl"' in body
 
 
 def test_legacy_per_revision_viewer_redirects_to_the_asset_viewer(tmp_path) -> None:

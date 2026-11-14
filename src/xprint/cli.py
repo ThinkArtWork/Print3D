@@ -309,15 +309,18 @@ def cmd_view(args: argparse.Namespace) -> int:
             f"Asset {args.asset_id} has no built revisions",
             hint="Call model_build (or `xprint cad run`) first.",
         )
+    path = (
+        Path(args.out).expanduser() if args.out else assets.asset_dir(args.asset_id) / VIEWER_FILE
+    )
+    if path.parent.resolve() == assets.asset_dir(args.asset_id).resolve():
+        for entry in entries:
+            entry["stl"] = f"{entry['revision']}/model.stl"
     html = collection_html(
         entries,
         title=name,
         subtitle=f"{len(entries)} revisions · interactive 3D",
         name=name,
         selected=target,
-    )
-    path = (
-        Path(args.out).expanduser() if args.out else assets.asset_dir(args.asset_id) / VIEWER_FILE
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
