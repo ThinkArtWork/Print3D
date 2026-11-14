@@ -204,6 +204,9 @@ def test_slice_plan_previews_material_and_process_options(workspace, tmp_path) -
             "strength": "strong",
             "flow_ratio": 1.03,
             "pressure_advance": 0.0558,
+            "fan_speed": 60,
+            "aux_fan_speed": 30,
+            "fan_first_layers": 2,
         },
     )
     assert payload["ok"] is True
@@ -215,6 +218,12 @@ def test_slice_plan_previews_material_and_process_options(workspace, tmp_path) -
     assert payload["options"]["walls"] == 4
     assert payload["options"]["flow_ratio"] == 1.03
     assert payload["options"]["pressure_advance"] == 0.0558
+    assert payload["options"]["fan_speed"] == 60
+    assert payload["options"]["aux_fan_speed"] == 30
+    assert payload["options"]["fan_first_layers"] == 2
+    assert payload["profile_overrides"]["filament"]["fan_max_speed"] == "60"
+    assert payload["profile_overrides"]["filament"]["additional_cooling_fan_speed"] == "30"
+    assert payload["profile_overrides"]["filament"]["close_fan_the_first_x_layers"] == "2"
     assert payload["profile_overrides"]["filament"]["filament_flow_ratio"] == "1.03"
     assert payload["profile_overrides"]["filament"]["pressure_advance"] == "0.0558"
     assert payload["profile_overrides"]["process"]["layer_height"] == "0.24"

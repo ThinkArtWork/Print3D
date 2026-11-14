@@ -406,6 +406,9 @@ def _slice_options(
     inner_wall_line_width: float = 0,
     top_surface_line_width: float = 0,
     arc_fitting: bool = False,
+    fan_speed: int = -1,
+    aux_fan_speed: int = -1,
+    fan_first_layers: int = -1,
 ) -> SliceOptions | None:
     """Build SliceOptions from MCP arguments (0 / -1 mean "unset")."""
 
@@ -419,6 +422,11 @@ def _slice_options(
     flow = float(flow_ratio) if flow_ratio and flow_ratio > 0 else None
     advance = (
         float(pressure_advance) if pressure_advance is not None and pressure_advance >= 0 else None
+    )
+    fan = int(fan_speed) if fan_speed is not None and fan_speed >= 0 else None
+    aux_fan = int(aux_fan_speed) if aux_fan_speed is not None and aux_fan_speed >= 0 else None
+    first_layers = (
+        int(fan_first_layers) if fan_first_layers is not None and fan_first_layers >= 0 else None
     )
     options = SliceOptions(
         material=(material or "").strip(),
@@ -438,6 +446,9 @@ def _slice_options(
         inner_wall_line_width=positive(inner_wall_line_width),
         top_surface_line_width=positive(top_surface_line_width),
         arc_fitting=bool(arc_fitting),
+        fan_speed=fan,
+        aux_fan_speed=aux_fan,
+        fan_first_layers=first_layers,
     )
     if options.resolved() == SliceOptions().resolved():
         return None
@@ -1810,7 +1821,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Dry-run a slice: resolve the target presets, report bed size and model "
             "checks, preview process/material options (material, layer_height, infill, "
             "infill_density, walls, top_shells, bottom_shells, strength, bed_temp, "
-            "nozzle_temp, build_plate, flow_ratio, pressure_advance, line_width, outer_wall_line_width, inner_wall_line_width, top_surface_line_width, arc_fitting), optionally pinned to "
+            "nozzle_temp, build_plate, flow_ratio, pressure_advance, line_width, outer_wall_line_width, inner_wall_line_width, top_surface_line_width, arc_fitting, fan_speed, aux_fan_speed, fan_first_layers), optionally pinned to "
             "a printer filament slot (printer + slot: multi-tool or AMS). Read-only: it "
             "reports the overrides and the slot material that slice_run would use."
         ),
@@ -1839,6 +1850,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         inner_wall_line_width: float = 0,
         top_surface_line_width: float = 0,
         arc_fitting: bool = False,
+        fan_speed: int = -1,
+        aux_fan_speed: int = -1,
+        fan_first_layers: int = -1,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -1861,6 +1875,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 inner_wall_line_width=inner_wall_line_width,
                 top_surface_line_width=top_surface_line_width,
                 arc_fitting=arc_fitting,
+                fan_speed=fan_speed,
+                aux_fan_speed=aux_fan_speed,
+                fan_first_layers=fan_first_layers,
             )
             options, slot_info = _apply_slot(
                 rt, options, printer_id=printer, slot=slot, build_plate=build_plate
@@ -1981,7 +1998,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "top_shells, bottom_shells, strength override the process preset; flow_ratio and "
             "pressure_advance override the filament flow/PA; line_width / outer_wall_line_width / "
             "inner_wall_line_width / top_surface_line_width override extrusion widths; "
-            "arc_fitting emits G2/G3 arcs for rounder holes; build_plate picks the plate; "
+            "arc_fitting emits G2/G3 arcs for rounder holes; fan_speed / aux_fan_speed / "
+            "fan_first_layers control part and auxiliary cooling; build_plate picks the plate; "
             "printer + slot pin the G-code to a filament slot and take its material/colour). "
             "Runs as an async job (poll job_status). confirm must be exactly "
             "'SLICE <asset_id> <target>'."
@@ -2013,6 +2031,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         inner_wall_line_width: float = 0,
         top_surface_line_width: float = 0,
         arc_fitting: bool = False,
+        fan_speed: int = -1,
+        aux_fan_speed: int = -1,
+        fan_first_layers: int = -1,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -2041,6 +2062,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 inner_wall_line_width=inner_wall_line_width,
                 top_surface_line_width=top_surface_line_width,
                 arc_fitting=arc_fitting,
+                fan_speed=fan_speed,
+                aux_fan_speed=aux_fan_speed,
+                fan_first_layers=fan_first_layers,
             )
             options, slot_info = _apply_slot(
                 rt, options, printer_id=printer, slot=slot, build_plate=build_plate

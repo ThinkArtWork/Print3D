@@ -445,6 +445,26 @@ def test_slice_options_apply_flow_and_pressure_advance() -> None:
         SliceOptions(pressure_advance=0.5).resolved()
 
 
+def test_slice_options_apply_fan_controls() -> None:
+    options = SliceOptions(material="PLA", fan_speed=60, aux_fan_speed=30, fan_first_layers=2)
+    resolved = options.resolved()
+    assert resolved["fan_speed"] == 60
+    assert resolved["aux_fan_speed"] == 30
+    assert resolved["fan_first_layers"] == 2
+    filament = options.filament_overrides()
+    assert filament["fan_max_speed"] == "60"
+    assert filament["fan_min_speed"] == "60"
+    assert filament["additional_cooling_fan_speed"] == "30"
+    assert filament["close_fan_the_first_x_layers"] == "2"
+
+    with pytest.raises(InvalidArgument, match="fan_speed"):
+        SliceOptions(fan_speed=120).resolved()
+    with pytest.raises(InvalidArgument, match="aux_fan_speed"):
+        SliceOptions(aux_fan_speed=-1).resolved()
+    with pytest.raises(InvalidArgument, match="fan_first_layers"):
+        SliceOptions(fan_first_layers=11).resolved()
+
+
 def test_trim_unused_tool_macros_keeps_only_used_heads(tmp_path: Path) -> None:
     gcode = tmp_path / "plate.gcode"
     gcode.write_text(

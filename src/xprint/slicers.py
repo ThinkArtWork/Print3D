@@ -190,6 +190,9 @@ class SliceOptions:
     inner_wall_line_width: float | None = None
     top_surface_line_width: float | None = None
     arc_fitting: bool = False
+    fan_speed: int | None = None
+    aux_fan_speed: int | None = None
+    fan_first_layers: int | None = None
 
     def resolved(self) -> dict[str, Any]:
         material = self.material.strip().upper()
@@ -265,6 +268,11 @@ class SliceOptions:
         for name, value in widths.items():
             if value is not None and not 0.2 <= float(value) <= 1.0:
                 raise InvalidArgument(f"{name} must be between 0.2 and 1.0 mm")
+        for name, value in (("fan_speed", self.fan_speed), ("aux_fan_speed", self.aux_fan_speed)):
+            if value is not None and not 0 <= int(value) <= 100:
+                raise InvalidArgument(f"{name} must be between 0 and 100 percent")
+        if self.fan_first_layers is not None and not 0 <= int(self.fan_first_layers) <= 10:
+            raise InvalidArgument("fan_first_layers must be between 0 and 10")
         if not 0 <= int(self.toolhead) <= 8:
             raise InvalidArgument("toolhead must be between 0 and 8")
 
@@ -288,6 +296,11 @@ class SliceOptions:
                 for name, value in widths.items()
             },
             "arc_fitting": bool(self.arc_fitting),
+            "fan_speed": int(self.fan_speed) if self.fan_speed is not None else None,
+            "aux_fan_speed": int(self.aux_fan_speed) if self.aux_fan_speed is not None else None,
+            "fan_first_layers": (
+                int(self.fan_first_layers) if self.fan_first_layers is not None else None
+            ),
         }
 
     def process_overrides(self) -> dict[str, str]:
@@ -366,6 +379,13 @@ class SliceOptions:
                 ):
                     overrides[f"{plate}_temp"] = bed
                     overrides[f"{plate}_temp_initial_layer"] = bed
+        if data.get("fan_speed") is not None:
+            overrides["fan_max_speed"] = str(data["fan_speed"])
+            overrides["fan_min_speed"] = str(data["fan_speed"])
+        if data.get("aux_fan_speed") is not None:
+            overrides["additional_cooling_fan_speed"] = str(data["aux_fan_speed"])
+        if data.get("fan_first_layers") is not None:
+            overrides["close_fan_the_first_x_layers"] = str(data["fan_first_layers"])
         return overrides
 
 

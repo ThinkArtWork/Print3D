@@ -70,7 +70,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 - 右上角下拉框切换历史版本；
 - 左键拖动旋转，右键 / Shift 拖动平移，滚轮缩放，触控板双指捏合；
-- 双击复位，`自旋` 开关，`截图` 导出当前版本 PNG；
+- 双击复位，`自旋` 开关，`截图` 导出当前版本 PNG，`导出 STL` 把当前版本几何直接下载为二进制 STL（可在切片软件里复核）；
 - HUD 显示当前版本的三角面数、包围盒 mm、体积 cm³。
 
 为什么不做侧栏面板：2026-11-14 曾实现并安装 `dsh-xprint-panel/`（DSH 左侧栏只读面板）。实测后认为价值不足——对话流里已有 `model_preview` 的四视图 PNG，面板只是同一数据的第二视图，却多一个 8765 进程和一套 CORS / 凭据边界。面板已卸载、源码已删除（历史见 [PLAN §17](docs/PLAN.md)）；3D 交互改由这个自包含 HTML 承担，不需要 DSH 客户端插件。
@@ -282,10 +282,14 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
 | `outer_wall_line_width` / `inner_wall_line_width` | 外/内墙线宽 mm；外墙偏宽会让转角鼓包，0.4 喷嘴可先试 0.40–0.42 |
 | `top_surface_line_width` | 顶面线宽 mm；顶面不平整时先把它降到 0.40 左右，再配合流量微调 |
 | `arc_fitting` | 是否输出 G2/G3 圆弧（默认 false）；Klipper 固件支持时开启，圆孔更圆、文件更小 |
+| `fan_speed` | 模型冷却风扇上限 0–100%；写入 `fan_max_speed`/`fan_min_speed`。U1 预设默认 100%，小件 PLA 可先降到 60 |
+| `aux_fan_speed` | 辅助/腔体风扇 0–100%，写入 `additional_cooling_fan_speed`；U1 预设默认 70%，可与 `fan_speed` 一起降 |
+| `fan_first_layers` | 前几层关闭模型风扇（默认 1）；提高可改善首层附着，但小件首层会更软 |
 | `printer` + `slot` | 绑定某台打印机的耗材槽（多喷头按工具头、单喷头 AMS 按槽位）：自动取该槽的材质/颜色，材质冲突直接拒绝；`slot=1` 表示 G-code 用 `T1` |
 
 - 流量：`flow_ratio` 直接改 `filament_flow_ratio`；`pressure_advance` 改 `pressure_advance` 并置 `enable_pressure_advance=1`。`printer_status` 会尽量读取打印机已存的校准系数（Snapmaker 的 `flow_calibrator.json`，按工具头给出 K 值），可把它作为 `pressure_advance` 传入。
 - 实测调参（U1，PLA Matte，0.2 mm，30×20×6 小板）：`flow_ratio=1.03` 时外墙出现挤出鼓包、顶面不平，孔壁/R3 圆角正常；把流量降到 `1.00`、外墙/顶面线宽从 0.42 降到 0.40，并开启 `arc_fitting`，作为下一轮验证组合。线宽和流量要一起看：有效挤出量 ≈ 流量 × 线宽。
+- 冷却：U1 的 Generic PLA 预设把模型风扇设成 100%、辅助风扇 70%，从第 1 层后全开。30×20×3 mm 小板的实测外壁中段有轻微内凹，优先怀疑冷却过强/两侧不均：先试 `fan_speed=60`、`aux_fan_speed=30`，保留 `overhang_fan_speed=100` 处理孔顶和悬垂；若仍内凹，再检查外壁线宽/PA 与机械（皮带张力、Z 轴）。
 - 打印板温度：`textured_pei` / `smooth_pei` 按材料温度；`cool_plate`、`textured_cool` 各降 15 °C，`engineering_plate` 升 10 °C，`supertack` 降 5 °C。对应到 Orca 的 `curr_bed_type` 和 `*_plate_temp` 键，不再把所有板型的温度键写成同一个值。
 - `overrides` 与上述参数通过复制 vendor 预设到私有 datadir、改写 process/filament JSON 实现；用户安装的 profile 不动。独立扁平 profile（如 U1）则复制到本次切片工作目录的 `profiles/` 后改写。
 - `slice_plan` 只预览 `profile_overrides`，不写文件；`slice_run` 的 `slice_inspect` 记录里保留本次 `options`。
@@ -512,7 +516,7 @@ XPrint/
 | 切片（G-code） | ✅ `slice_*` 四件套，外部 OrcaSlicer，异步任务 + 统计 |
 | 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert；9 工具头 preflight |
 | 切片后发送打印机 | ✅ Moonraker / OctoPrint / Bambu LAN / PrusaLink / 声明式 HTTP 适配器，`send`（上传+启动）与 `printer_cancel`；Snapmaker U1 真机打印完成（25 层 / 325 s）；Bambu 与 PrusaLink 未真机验证 |
-| 交互式 3D 查看 | ✅ `model_view` 导出单文件 `viewer.html`：WebGL 旋转/缩放/平移/自旋/截图，无外部依赖 |
+| 交互式 3D 查看 | ✅ `model_view` 导出单文件 `viewer.html`：WebGL 旋转/缩放/平移/自旋/截图/导出 STL，无外部依赖 |
 | 打印前检查与摆放 | ✅ `printability_check` / `orientation_plan`：薄壁、悬垂、支撑体积估计、热床接触、24 向摆放评分 |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。
