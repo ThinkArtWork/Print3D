@@ -183,7 +183,7 @@ class LoadedConfig:
 
 
 def default_config_dict(workspace: str = DEFAULT_WORKSPACE) -> dict[str, Any]:
-    """The config written by ``3dprint init`` — no secrets, no machine paths."""
+    """The config written by ``print3d init`` — no secrets, no machine paths."""
     return {
         "server": {"host": "127.0.0.1", "port": 8765, "token_env": "PRINT3D_TOKEN"},
         "workspace": workspace,
@@ -248,7 +248,7 @@ def _read_json(path: Path) -> Any:
     except json.JSONDecodeError as exc:
         raise ConfigError(
             f"Invalid JSON in {path} at line {exc.lineno} column {exc.colno}: {exc.msg}",
-            hint="Fix the JSON syntax, or delete the file and run `3dprint init`.",
+            hint="Fix the JSON syntax, or delete the file and run `print3d init`.",
             details={"path": str(path)},
         ) from exc
 
@@ -291,7 +291,7 @@ def load_config(
             where = ".".join(str(part) for part in first.get("loc", ())) or "<root>"
             raise ConfigError(
                 f"Invalid config at {where}: {first.get('msg')}",
-                hint=f"Fix {config_path} or run `3dprint init --force`.",
+                hint=f"Fix {config_path} or run `print3d init --force`.",
                 details={"path": str(config_path), "errors": exc.errors()[:5]},
             ) from exc
         exists = True
@@ -299,7 +299,7 @@ def load_config(
         cfg = Config.model_validate(default_config_dict(base_workspace))
         exists = False
         warnings.append(
-            f"No config at {config_path}; using defaults (run `3dprint init` to write one)."
+            f"No config at {config_path}; using defaults (run `print3d init` to write one)."
         )
 
     # Environment overrides (flags are applied by the CLI on top).
@@ -314,7 +314,7 @@ def load_config(
 
 
 def write_config(loaded: LoadedConfig, *, force: bool = False) -> Path:
-    """Write the current config back to disk (used by ``3dprint init``)."""
+    """Write the current config back to disk (used by ``print3d init``)."""
     target = loaded.path or Path(loaded.config.workspace).expanduser() / "config.json"
     if target.exists() and not force:
         raise ConfigError(

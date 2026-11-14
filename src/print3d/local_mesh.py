@@ -1,6 +1,6 @@
 """Adapter for user-installed local 3D generators.
 
-3DPrint does not bundle model weights.  A local provider is a command that
+Print3D does not bundle model weights.  A local provider is a command that
 follows a small contract:
 
 * it receives at least one of ``prompt`` / ``image`` (via the ``{prompt}`` and
@@ -10,7 +10,7 @@ follows a small contract:
 * it exits non-zero on failure.
 
 Anything that can do that — TripoSR, Hunyuan3D, Shap-E, a ComfyUI workflow, a
-private service wrapper — becomes a provider without changing 3DPrint.
+private service wrapper — becomes a provider without changing Print3D.
 """
 
 from __future__ import annotations

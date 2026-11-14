@@ -1,7 +1,7 @@
 """Run model scripts as external processes with limits, and report geometry.
 
 The security model from the design doc applies here: an LLM-written script is
-still untrusted code.  It is never imported into the 3DPrint process; it runs in a
+still untrusted code.  It is never imported into the Print3D process; it runs in a
 child interpreter with a scrubbed environment, a CPU/wall-clock budget and a
 size cap, and only the JSON it produced is read back.
 """
@@ -162,7 +162,7 @@ def run_script(
 ) -> RunResult:
     """Execute ``script`` in a child interpreter and read back its geometry.
 
-    ``python`` selects the CAD interpreter (defaults to the one running 3DPrint);
+    ``python`` selects the CAD interpreter (defaults to the one running Print3D);
     set ``config.cad.python`` when ``build123d`` lives in another venv.
     ``input_step`` is an existing STEP file the script may import; the worker
     exposes it to the script as the string globals ``INPUT_STEP`` and

@@ -17,7 +17,7 @@ class JobRunner:
 
     def __init__(self, store: JobStore, *, workers: int = 2) -> None:
         self.store = store
-        self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="3dprint-job")
+        self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="print3d-job")
         self._lock = threading.Lock()
 
     def submit(
@@ -46,7 +46,7 @@ class JobRunner:
                 job_id,
                 Print3DError(
                     f"{type(exc).__name__}: {exc}",
-                    hint="This is a bug in 3DPrint or in the provider command.",
+                    hint="This is a bug in Print3D or in the provider command.",
                 ),
             )
         else:

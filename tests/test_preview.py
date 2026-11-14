@@ -41,7 +41,7 @@ def ascii_stl(triangles) -> bytes:
 
 
 def binary_stl(triangles) -> bytes:
-    header = b"3dprint test".ljust(80, b"\0")
+    header = b"print3d test".ljust(80, b"\0")
     body = struct.pack("<I", len(triangles))
     for a, b, c in triangles:
         body += struct.pack("<3f", 0, 0, 0)

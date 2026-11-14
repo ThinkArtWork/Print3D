@@ -1,6 +1,6 @@
 """Slicer adapters.
 
-3DPrint never links against a slicer: it runs the vendor CLI as an external
+Print3D never links against a slicer: it runs the vendor CLI as an external
 process (OrcaSlicer and its forks are GPL software).  This module owns the
 command line, the profile handling and the G-code inspection.
 """

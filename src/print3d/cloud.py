@@ -561,7 +561,7 @@ def download_model(
 
     Redirects are followed by hand (max :data:`MAX_REDIRECTS`), each hop is
     re-validated as http(s) with a host, and the body is read in chunks so a
-    hostile or broken provider cannot make 3DPrint buffer gigabytes.
+    hostile or broken provider cannot make Print3D buffer gigabytes.
     """
 
     if not url:

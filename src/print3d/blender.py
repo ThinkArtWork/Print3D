@@ -2,7 +2,7 @@
 
 The client model writes the script (text-to-3D); for image-to-3D it also gets
 the picture as a normal MCP image block and may read the same file from
-``sys.argv`` after ``--``.  3DPrint only provides the execution + export +
+``sys.argv`` after ``--``.  Print3D only provides the execution + export +
 geometry-check loop.
 """
 
@@ -133,7 +133,7 @@ def run_blender(
     directory = Path(workdir)
     directory.mkdir(parents=True, exist_ok=True)
     scene_path = directory / "scene.py"
-    export_path = directory / "3dprint_export.py"
+    export_path = directory / "print3d_export.py"
     atomic_write_text(scene_path, script, mode=0o600)
     atomic_write_text(export_path, EXPORT_SCRIPT, mode=0o600)
 

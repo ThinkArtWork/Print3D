@@ -1,8 +1,8 @@
 {
-  "name": "@local/3dprint-mcp",
+  "name": "@local/print3d-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "Connect DeepSeek Harness to a local 3DPrint MCP server over stdio.",
+  "description": "Connect DeepSeek Harness to a local Print3D MCP server over stdio.",
   "type": "module",
   "files": ["cordis.patch.yml"],
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }

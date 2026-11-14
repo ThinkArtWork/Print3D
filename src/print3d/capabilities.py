@@ -128,7 +128,7 @@ _BUILD123D_PROBE = "import importlib.metadata as m; print(m.version('build123d')
 def _build123d_version(python: str | None) -> tuple[str | None, str]:
     """Return the build123d version in the CAD interpreter and where it was read.
 
-    The default is the interpreter running 3DPrint; ``cad.python`` can point at a
+    The default is the interpreter running Print3D; ``cad.python`` can point at a
     separate environment, in which case the version is read in a subprocess with
     the same scrubbed environment the worker will get.
     """

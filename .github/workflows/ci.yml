@@ -57,8 +57,8 @@ jobs:
         run: |
           uv venv --python 3.13 /tmp/smoke
           uv pip install --python /tmp/smoke/bin/python dist/*.whl
-          PRINT3D_WORKSPACE=/tmp/smoke-ws /tmp/smoke/bin/3dprint capabilities || true
-          /tmp/smoke/bin/3dprint --help
+          PRINT3D_WORKSPACE=/tmp/smoke-ws /tmp/smoke/bin/print3d capabilities || true
+          /tmp/smoke/bin/print3d --help
 
       - uses: actions/upload-artifact@v4
         with:

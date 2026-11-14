@@ -18,9 +18,10 @@ dist/
 build/
 
 # runtime workspace (if pointed inside the repo)
-.3dprint/
-# legacy workspace from before the 3DPrint rename; keep ignoring the old data
+.print3d/
+# legacy workspaces from before the rename; keep ignoring the old data
 .xprint/
+.3dprint/
 jobs/
 assets/
 cache/

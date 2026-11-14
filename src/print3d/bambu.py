@@ -9,7 +9,7 @@ Bambu printers in LAN mode expose two services:
   (``.3mf`` archives whose ``Metadata/plate_1.gcode`` is the sliced plate).
 
 This module is deliberately self-contained and does not import any vendor
-code.  It implements only the small, documented-by-community subset 3DPrint
+code.  It implements only the small, documented-by-community subset Print3D
 needs: read state, upload a 3MF, start a project, stop a print.
 
 The protocol is reverse engineered from community clients and verified with
@@ -144,7 +144,7 @@ class _BambuMqtt:
     def connect(self) -> None:
         import paho.mqtt.client as mqtt
 
-        client_id = "3dprint-" + "".join(
+        client_id = "print3d-" + "".join(
             random.choices(string.ascii_lowercase + string.digits, k=8)
         )
         client = mqtt.Client(

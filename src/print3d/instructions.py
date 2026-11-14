@@ -1,7 +1,7 @@
 """The MCP `instructions` string shown to clients at connect time."""
 
 INSTRUCTIONS = """\
-3DPrint is a self-hosted bridge between MCP agents and the 3D-printing tools on
+Print3D is a self-hosted bridge between MCP agents and the 3D-printing tools on
 this machine.
 
 Safety contract:
@@ -10,7 +10,7 @@ Safety contract:
 - Every tool that writes files or talks to a paid service requires the exact
   `confirm` string documented in its schema.  A wrong string is rejected with
   code `confirmation_mismatch`, nothing is written.
-- 3DPrint never sends arbitrary G-code to a printer; slicing output is inspected
+- Print3D never sends arbitrary G-code to a printer; slicing output is inspected
   and confirmed first.
 
 Start with `capabilities` to learn which providers, CAD backends, image
@@ -51,7 +51,7 @@ Two extra engines reuse the same asset + preview loop:
   image-to-3D, look at the attached image yourself and write the scene.
 - `generate_local` runs a user-installed local generator (configured under
   providers.local.<id>) as a background job; poll `job_status`, then preview the
-  produced asset.  3DPrint downloads no weights and calls no cloud API.
+  produced asset.  Print3D downloads no weights and calls no cloud API.
 
 Both accept `image=` for image-driven work; assets remember the reference.
 

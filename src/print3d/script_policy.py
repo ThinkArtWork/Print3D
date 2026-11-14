@@ -1,6 +1,6 @@
-"""Static checks for model scripts before 3DPrint stores or runs them.
+"""Static checks for model scripts before Print3D stores or runs them.
 
-An LLM-written ``build123d`` script is still untrusted code.  3DPrint does not
+An LLM-written ``build123d`` script is still untrusted code.  Print3D does not
 execute it in-process, but it does store it and may hand it to the CAD backend,
 so a cheap static gate runs first:
 

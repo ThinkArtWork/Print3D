@@ -30,7 +30,7 @@ from .tools import register_all
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
-def build_server(runtime: Runtime | None = None, *, name: str = "3dprint") -> FastMCP:
+def build_server(runtime: Runtime | None = None, *, name: str = "print3d") -> FastMCP:
     """Create the FastMCP application with every M0 tool registered."""
 
     rt = runtime or Runtime.create()
@@ -44,7 +44,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "3dprint") -> Fa
         port=port,
     )
     # FastMCP otherwise advertises the ``mcp`` package version; hosts show this
-    # string in their server list, so report 3DPrint's own version instead.
+    # string in their server list, so report Print3D's own version instead.
     if hasattr(server, "_mcp_server"):
         server._mcp_server.version = __version__
 
@@ -96,7 +96,7 @@ class BearerAuth:
                     "status": 401,
                     "headers": [
                         (b"content-type", b"application/json"),
-                        (b"www-authenticate", b'Bearer realm="3dprint"'),
+                        (b"www-authenticate", b'Bearer realm="print3d"'),
                         (b"content-length", str(len(body)).encode()),
                     ],
                 }
@@ -124,7 +124,7 @@ def serve(
     if transport not in {"http", "streamable-http"}:
         raise ConfigError(
             f"unknown transport {transport!r}",
-            hint="Use `3dprint serve --stdio` or `3dprint serve --http`.",
+            hint="Use `print3d serve --stdio` or `print3d serve --http`.",
         )
 
     cfg = runtime.loaded.config.server
@@ -137,7 +137,7 @@ def serve(
             f"refusing to bind {bind_host} without a bearer token",
             hint=(
                 "Set PRINT3D_TOKEN (or server.token in secrets.json) before exposing "
-                "3DPrint beyond loopback."
+                "Print3D beyond loopback."
             ),
         )
 

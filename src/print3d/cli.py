@@ -1,6 +1,6 @@
 """Command line interface.
 
-``3dprint`` is the operator-facing surface: it starts the MCP server, prints
+``print3d`` is the operator-facing surface: it starts the MCP server, prints
 capabilities, and manages the workspace.  Every command prints JSON unless it
 is a human-only convenience (``init``, ``serve``), so scripts can pipe it.
 """
@@ -20,9 +20,7 @@ from .config import Secrets, load_all, write_config
 from .errors import Print3DError, error_payload
 from .jobs import JobStore
 from .registry import builtin_registry
-from .workspace import Workspace
-
-DEFAULT_WORKSPACE = "~/.3dprint"
+from .workspace import DEFAULT_WORKSPACE, Workspace
 
 
 def _print_json(data: Any) -> None:
@@ -64,7 +62,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         )
     )
     print(
-        "next: add API keys to secrets.json (see README) and run `3dprint capabilities`",
+        "next: add API keys to secrets.json (see README) and run `print3d capabilities`",
         file=sys.stderr,
     )
     return 0
@@ -238,7 +236,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     if not stl.is_file():
         raise Print3DError(
             f"Revision {target} has no built model",
-            hint="Call model_build (or `3dprint cad run`) first.",
+            hint="Call model_build (or `print3d cad run`) first.",
         )
     views = tuple(item.strip().lower() for item in (args.views or "").split(",") if item.strip())
     png = render_views(
@@ -290,7 +288,7 @@ def cmd_view(args: argparse.Namespace) -> int:
     if not stl.is_file():
         raise Print3DError(
             f"Revision {target} has no built model",
-            hint="Call model_build (or `3dprint cad run`) first.",
+            hint="Call model_build (or `print3d cad run`) first.",
         )
     name = str(manifest.get("name") or args.asset_id)
     entries = []
@@ -311,7 +309,7 @@ def cmd_view(args: argparse.Namespace) -> int:
     if not entries:
         raise Print3DError(
             f"Asset {args.asset_id} has no built revisions",
-            hint="Call model_build (or `3dprint cad run`) first.",
+            hint="Call model_build (or `print3d cad run`) first.",
         )
     path = (
         Path(args.out).expanduser() if args.out else assets.asset_dir(args.asset_id) / VIEWER_FILE
@@ -358,7 +356,7 @@ def cmd_view(args: argparse.Namespace) -> int:
 
 
 def cmd_version(args: argparse.Namespace) -> int:
-    _print_json({"ok": True, "name": "3dprint", "version": __version__})
+    _print_json({"ok": True, "name": "print3d", "version": __version__})
     return 0
 
 
@@ -367,7 +365,7 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="3dprint",
+        prog="print3d",
         description="Self-hosted MCP bridge for 3D-printing tools.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

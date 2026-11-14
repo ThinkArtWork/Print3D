@@ -31,7 +31,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
             "into the workspace as a concept reference, so it can be attached to a "
             "model revision with model_write(reference=...). This is the image-input "
             "half of the text/image -> model path: the client model looks at the "
-            "image and writes the script; 3DPrint keeps the image as provenance. "
+            "image and writes the script; Print3D keeps the image as provenance. "
             "WRITES files: confirm must be exactly 'IMPORT <name>'."
         ),
     )

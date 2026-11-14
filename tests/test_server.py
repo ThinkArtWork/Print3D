@@ -31,7 +31,7 @@ def test_handshake_and_tools_list() -> None:
             return info, listing
 
     info, listing = run(scenario())
-    assert info.serverInfo.name == "3dprint"
+    assert info.serverInfo.name == "print3d"
     assert info.serverInfo.version == __version__
     assert sorted(t.name for t in listing.tools) == [
         "asset_export",

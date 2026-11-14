@@ -1,4 +1,4 @@
-"""3DPrint — a self-hosted 3D printing MCP server.
+"""Print3D — a self-hosted 3D printing MCP server.
 
 The package is organised around a small core (config, workspace, jobs, registry)
 and a set of pluggable adapters (providers, CAD, render, slicing, printers).

@@ -14,7 +14,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
     @server.tool(
         name="capabilities",
         description=(
-            "Report what this 3DPrint installation can do right now: cloud image-to-3D "
+            "Report what this Print3D installation can do right now: cloud image-to-3D "
             "providers (key present or not), CAD/render backends, slicer profiles and "
             "printers, plus the adapters compiled in. Never returns API keys and never "
             "writes files."
@@ -26,7 +26,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
     @server.tool(
         name="system_status",
         description=(
-            "Report 3DPrint version, Python/platform, workspace paths, config/secrets "
+            "Report Print3D version, Python/platform, workspace paths, config/secrets "
             "presence and job counters. Read-only: writes_performed is always false."
         ),
     )

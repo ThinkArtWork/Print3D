@@ -1,6 +1,6 @@
 """Workspace layout and path sandbox.
 
-``~/.3dprint`` (or ``--workspace``) is the only directory 3DPrint is allowed to
+``~/.print3d`` (or ``--workspace``) is the only directory Print3D is allowed to
 read model inputs from or write artifacts to.  Every user-supplied path goes
 through :meth:`Workspace.safe_path`, which resolves symlinks *before* checking
 containment, so ``assets/link -> /etc`` cannot escape.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .errors import InvalidArgument, NotFound, PathOutsideWorkspace
 
-DEFAULT_WORKSPACE = "~/.3dprint"
+DEFAULT_WORKSPACE = "~/.print3d"
 
 #: Directories created inside a workspace on first use.
 SUBDIRS = ("assets", "references", "jobs", "slices", "profiles", "cache", "logs")

@@ -36,7 +36,7 @@ class ErrorCode(StrEnum):
 
 
 class Print3DError(Exception):
-    """Base class for all expected 3DPrint failures."""
+    """Base class for all expected Print3D failures."""
 
     code: ErrorCode = ErrorCode.INTERNAL
     default_hint: str | None = None
@@ -73,7 +73,7 @@ class Print3DError(Exception):
 
 class ConfigError(Print3DError):
     code = ErrorCode.CONFIG_INVALID
-    default_hint = "Run `3dprint init` to write a default config, or fix config.json."
+    default_hint = "Run `print3d init` to write a default config, or fix config.json."
 
 
 class ConfigMissing(ConfigError):
@@ -82,7 +82,7 @@ class ConfigMissing(ConfigError):
 
 class SecretsInsecure(Print3DError):
     code = ErrorCode.SECRETS_INSECURE
-    default_hint = "chmod 600 ~/.3dprint/secrets.json"
+    default_hint = "chmod 600 ~/.print3d/secrets.json"
 
 
 class PathError(Print3DError):
@@ -143,7 +143,7 @@ def error_payload(exc: BaseException) -> dict[str, Any]:
     return {
         "code": ErrorCode.INTERNAL.value,
         "message": str(exc) or exc.__class__.__name__,
-        "hint": "Re-run with `3dprint --verbose` for a traceback.",
+        "hint": "Re-run with `print3d --verbose` for a traceback.",
     }
 
 

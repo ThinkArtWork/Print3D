@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "3DPrint"
+name = "Print3D"
 version = "0.1.0"
 description = "Self-hosted 3D printing MCP server: generate, edit, render, slice, print."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "3DPrint project" }]
+authors = [{ name = "Print3D project" }]
 keywords = ["mcp", "3d-printing", "cad", "slicer", "klipper"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.scripts]
-3dprint = "print3d.cli:main"
+print3d = "print3d.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/print3d"]

@@ -40,7 +40,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
         name="model_write",
         description=(
             "Store a build123d script as a new asset revision, without calling any "
-            "LLM. The script must follow 3DPrint's contract (from build123d import *, "
+            "LLM. The script must follow Print3D's contract (from build123d import *, "
             "a build_part() returning one solid, PARAMS in mm, base on z=0) and passes "
             "the static safety checks; nothing is executed here. Use asset_id to "
             "append to an existing asset, or name to create one. Optional `reference` "
@@ -83,7 +83,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
             checks = summarise(check_script(script))
             if not checks["ok"]:
                 raise InvalidArgument(
-                    "The script failed 3DPrint's safety checks; nothing was stored",
+                    "The script failed Print3D's safety checks; nothing was stored",
                     hint="See details.issues for line numbers, then call model_write again.",
                     details={"issues": checks["errors"]},
                 )
@@ -146,7 +146,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
     @server.tool(
         name="model_build",
         description=(
-            "Execute a stored asset revision in 3DPrint's sandboxed build123d "
+            "Execute a stored asset revision in Print3D's sandboxed build123d "
             "interpreter (CPU/time/file limits, no API keys in the environment) and "
             "attach the result to that revision. Returns real geometry checks "
             "(watertight, boundary/non-manifold edges, bbox, volume) and stores "

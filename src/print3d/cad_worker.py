@@ -31,14 +31,14 @@ MAX_STL_TRIANGLES = 400_000
 
 
 def _load_module(path: Path, input_step: Path | None = None) -> Any:
-    spec = importlib.util.spec_from_file_location("3dprint_user_model", path)
+    spec = importlib.util.spec_from_file_location("print3d_user_model", path)
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     # Set the globals before executing the script so module-level code sees them.
     module.__dict__["INPUT_STEP"] = str(input_step) if input_step else ""
     module.__dict__["INPUT_NAME"] = input_step.name if input_step else ""
-    sys.modules["3dprint_user_model"] = module
+    sys.modules["print3d_user_model"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -195,7 +195,7 @@ def _apply_limits(cpu_seconds: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="3dprint-cad-worker")
+    parser = argparse.ArgumentParser(prog="print3d-cad-worker")
     parser.add_argument("script")
     parser.add_argument("outdir")
     parser.add_argument("--cpu-seconds", type=int, default=0)

@@ -25,7 +25,7 @@ ENV_KEYS = (
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point 3DPrint at a throwaway workspace and drop ambient credentials."""
+    """Point Print3D at a throwaway workspace and drop ambient credentials."""
 
     workspace = tmp_path / "ws"
     for key in ENV_KEYS:

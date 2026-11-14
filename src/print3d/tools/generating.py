@@ -181,7 +181,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
         name="mesh_fit",
         description=(
             "Fit an existing STL/GLB/OBJ mesh to a real millimetre size and turn "
-            "it into a versioned 3DPrint asset. This is the finishing step for "
+            "it into a versioned Print3D asset. This is the finishing step for "
             "image-to-3D: keep the generated shape, repair it, scale it, seat it on "
             "z=0, centre it, decimate to a preview-friendly triangle budget, then "
             "export STL/GLB and a named viewer. Sizing is explicit: pass "
@@ -387,7 +387,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
         description=(
             "Generate a 3D model with a cloud provider (tripo, hunyuan_openai or "
             "hunyuan TC3) in the background. Configure it in providers.cloud.<id> "
-            "(adapter, key env, scale, timeout). 3DPrint submits the task, polls it, "
+            "(adapter, key env, scale, timeout). Print3D submits the task, polls it, "
             "downloads the result, converts it to STL, records real geometry checks "
             "and stores a versioned asset. Pass optional size_mm=[x,y,z] or "
             "max_dimension_mm=<longest side> to run the same mesh fit after "
@@ -442,7 +442,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
             if entry is None:
                 raise InvalidArgument(
                     f"Unknown cloud provider: {provider}",
-                    hint="Add providers.cloud.<id> to config.json; `3dprint config` shows the file.",
+                    hint="Add providers.cloud.<id> to config.json; `print3d config` shows the file.",
                     details={"configured": sorted(rt.loaded.config.providers.cloud)},
                 )
             if not entry.get("enabled", True):
@@ -674,7 +674,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
             "Run a user-installed local 3D generator in the background. The provider "
             "is configured in providers.local.<id> as a command + args template with "
             "{prompt}, {image}, {outdir}, {name} placeholders; it must write "
-            '<outdir>/mesh.stl (or print {"mesh": path}). 3DPrint creates the asset '
+            '<outdir>/mesh.stl (or print {"mesh": path}). Print3D creates the asset '
             "from the produced STL, records real geometry checks and returns a "
             "job_id: poll job_status until succeeded, then call model_preview. "
             "No weights are downloaded and no cloud API is called. WRITES files and "
@@ -709,7 +709,7 @@ def register(server: FastMCP, rt: Runtime) -> None:
                     f"Unknown local provider: {provider}",
                     hint=(
                         "Add providers.local.<id> to config.json with command/args; "
-                        "run `3dprint config` to see the current file."
+                        "run `print3d config` to see the current file."
                     ),
                     details={"configured": sorted(rt.loaded.config.providers.local)},
                 )
