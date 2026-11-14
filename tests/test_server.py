@@ -45,6 +45,7 @@ def test_handshake_and_tools_list() -> None:
         "model_build",
         "model_preview",
         "model_show",
+        "model_view",
         "model_write",
         "printer_cancel",
         "printer_list",

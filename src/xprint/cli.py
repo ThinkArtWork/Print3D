@@ -265,6 +265,50 @@ def cmd_preview(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_view(args: argparse.Namespace) -> int:
+    import webbrowser
+
+    from .assets import AssetStore
+    from .viewer import write_viewer
+
+    ws, _, _ = _load(args)
+    assets = AssetStore(ws)
+    manifest = assets.load(args.asset_id)
+    target = args.revision or assets.latest_revision(manifest)
+    if not target:
+        raise XPrintError(f"Asset {args.asset_id} has no revisions", hint="Call model_write first.")
+    stl = assets.revision_dir(args.asset_id, target) / "model.stl"
+    if not stl.is_file():
+        raise XPrintError(
+            f"Revision {target} has no built model",
+            hint="Call model_build (or `xprint cad run`) first.",
+        )
+    name = str(manifest.get("name") or args.asset_id)
+    result = write_viewer(
+        stl,
+        out_path=Path(args.out).expanduser() if args.out else None,
+        title=name,
+        subtitle=f"revision {target} · interactive 3D",
+        revision=target,
+        name=name,
+    )
+    path = Path(result["path"]).resolve()
+    if args.open:
+        webbrowser.open(path.as_uri())
+    _print_json(
+        {
+            "ok": True,
+            "asset_id": args.asset_id,
+            "revision": target,
+            "viewer_path": str(path),
+            "bytes": result["bytes"],
+            "triangles": result["triangles"],
+            "opened": bool(args.open),
+        }
+    )
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     _print_json({"ok": True, "name": "xprint", "version": __version__})
     return 0
@@ -346,6 +390,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--height", type=int, default=700)
     p.add_argument("--out", default=None, help="output PNG (default: cache/previews/)")
     p.set_defaults(func=cmd_preview)
+
+    p = sub.add_parser("view", parents=[common], help="write an interactive 3D HTML viewer")
+    p.add_argument("asset_id")
+    p.add_argument("--revision", default="")
+    p.add_argument("--out", default=None, help="output HTML (default: next to model.stl)")
+    p.add_argument("--open", action="store_true", help="open the viewer in the default browser")
+    p.set_defaults(func=cmd_view)
 
     p = sub.add_parser("version", parents=[common], help="print version")
     p.set_defaults(func=cmd_version)

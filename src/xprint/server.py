@@ -73,6 +73,7 @@ from .slicers import (
     slice_stl,
     validate_slice_id,
 )
+from .viewer import VIEWER_FILE, write_viewer
 from .workspace import Workspace, atomic_write_bytes
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -792,6 +793,80 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 ),
             }
             return _image_result(payload, images)
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="model_view",
+        description=(
+            "Write a self-contained interactive 3D viewer (HTML, orbit / pan / zoom, "
+            "no server or CDN) for a built revision's model.stl. Open the file in a "
+            "browser, or hand it to `present` so the user gets an open action. The "
+            "geometry is embedded in the file. WRITES one file in the revision "
+            "directory: confirm must be exactly 'VIEW <asset_id>'."
+        ),
+    )
+    def model_view(asset_id: str, confirm: str, revision: str = "") -> dict[str, Any]:
+        try:
+            token = validate_asset_id(asset_id)
+            expected = f"VIEW {token}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(token)
+            target = revision or assets.latest_revision(manifest)
+            if not target:
+                raise InvalidArgument(
+                    f"Asset {token} has no revisions",
+                    hint="Call model_write first.",
+                )
+            directory = assets.revision_dir(token, target)
+            stl = directory / "model.stl"
+            if not stl.is_file():
+                raise InvalidArgument(
+                    f"Revision {target} has no built model yet",
+                    hint=(
+                        f"Call model_build with asset_id {token!r} and "
+                        f"confirm 'BUILD {token}' first."
+                    ),
+                )
+
+            name = str(manifest.get("name") or token)
+            try:
+                result = write_viewer(
+                    stl,
+                    title=name,
+                    subtitle=f"revision {target} · interactive 3D",
+                    revision=target,
+                    name=name,
+                )
+            except ValueError as exc:
+                raise InvalidArgument(
+                    f"Cannot build the 3D viewer: {exc}",
+                    hint="Reduce the triangle count or inspect the STL.",
+                ) from None
+
+            path = Path(result["path"])
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "asset_id": token,
+                "revision": target,
+                "viewer_path": rt.workspace.rel(path),
+                "viewer_file": str(path),
+                "file": VIEWER_FILE,
+                "triangles": result["triangles"],
+                "bytes": result["bytes"],
+                "hint": (
+                    "Open the HTML in a browser to orbit, pan, zoom, spin and save "
+                    "a PNG. Call `present` with viewer_file to give the user an "
+                    "open action in DSH."
+                ),
+            }
         except XPrintError as exc:
             return tool_error(exc)
 
@@ -2177,20 +2252,6 @@ def serve(
     app = server.streamable_http_app()
     if token:
         app.add_middleware(BearerAuth, token=token)
-
-    # The optional DSH Web panel runs on a different loopback port, so its
-    # browser calls are cross-origin.  Allow loopback origins only, matching
-    # the bind policy above; added last so CORS handles preflight before auth.
-    from starlette.middleware.cors import CORSMiddleware
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$",
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["mcp-session-id"],
-        max_age=600,
-    )
 
     import uvicorn
 

@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **24 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。DSH 用户还可选装**左侧栏只读面板**，在 GUI 里直接看资产和渲染图。
+> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **25 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
 
 ## 文档
 
@@ -57,40 +57,21 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 之后在会话里直接调用 `mcp__xprint__system_status`、`mcp__xprint__capabilities` 等工具。
 
-### 左侧栏面板（可选，DSH 客户端插件）
+### 交互式 3D 查看（`model_view`）
 
-`dsh-xprint-panel/` 给 DSH 左侧栏加一个立方体图标；点开是同一工作区的只读视图：
+`model_build` 之后调用：
 
-- 资产列表（按更新时间倒序）与版本数；
-- 选中资产后显示最新渲染，若该版本带概念图会并排对照；
-- 版本、视图、缓存、参考图路径，以及 `running/queued/failed/succeeded` 任务计数；
-- 加载完自动选中最新资产；刷新失败时保留旧数据并显示内联提示。
-- 每 2.5 秒静默刷新：会话里刚 `model_build` 出的新版本会自动出现并重新渲染，不需要手动刷新。
-
-它**不替代**会话里的 `mcp__xprint__*` 工具：面板不写资产、不启动切片/打印，所有写操作仍然必须由模型带精确 `confirm` 调用。
-
-安装（只需一次，装到当前 DSH profile，所有会话可见）：
-
-```bash
-# 在 DSH 里让 agent 执行，或使用 Plugins → Add plugin 选择该目录
-plugin_manager install_bundle target: /absolute/path/to/XPrint/dsh-xprint-panel
+```
+model_view(asset_id, confirm="VIEW <asset_id>")
 ```
 
-装完刷新 DSH 页面即可；HMR 会热更新客户端代码。Host 半随插件拉起 `xprint serve --http --host 127.0.0.1 --port 8765`，复用 `.xprint` 工作区，卸载时发 SIGTERM。命令、工作区和 cwd 在 `dsh-xprint-panel/cordis.patch.yml` 里，仓库移动后要改成新的绝对路径：
+会在该版本目录写出 `viewer.html`（几何以 base64 内嵌，单文件、无 CDN、无服务端），返回绝对路径 `viewer_file`。让宿主执行 `present` 打开它，或直接用浏览器打开：
 
-```yaml
-- insert:
-    - id: xprint-panel
-      name: '@local/xprint-panel'
-      config:
-        command: /Users/macadmin/XPrint/.venv/bin/xprint
-        workspace: /Users/macadmin/XPrint/.xprint
-        cwd: /Users/macadmin/XPrint
-```
+- 左键拖动旋转，右键 / Shift 拖动平移，滚轮缩放，触控板双指捏合；
+- 双击复位，`自旋` 开关，`截图` 导出 PNG；
+- HUD 显示三角面数、包围盒 mm、体积 cm³。
 
-**安全边界**：浏览器半用相对路径 `/api/xprint/mcp` 走 Host 半注册的同源代理（桌面壳 origin 是 `dsh-app://app`，直连 8765 会被 CORS 拦），只有 Host 半版本过旧（代理返回非 JSON 404/405/501）才回退直连。8765 只绑定回环地址；`serve()` 的 CORS 只放行 loopback origin（`127.0.0.1`/`localhost`/`[::1]` 的任意端口），**不放宽到 `null`/`file://`**，避免任意本地 HTML 借浏览器调用写工具。浏览器半不保存任何凭据；如果 `secrets.json` 配了 `server.token`（或运行环境带 `XPRINT_TOKEN`），面板会显示离线——此时应改用会话里的 stdio 工具，或临时去掉 token。8765 与 stdio 服务共用工作区，但**没有跨进程锁**，两个服务同时写同一资产仍以最后写入为准。
-
-图标没出现时：先在 **Plugins** 页确认 `@local/xprint-panel` 已启用，再刷新页面；仍连不上就检查 `lsof -nP -iTCP:8765 -sTCP:LISTEN` 是否有进程、以及 `cordis.patch.yml` 里的 `command` 是否存在。细节见 [dsh-xprint-panel/README.md](dsh-xprint-panel/README.md)，设计说明见 [DESIGN §3.3](docs/DESIGN.md)。
+为什么不做侧栏面板：2026-11-14 曾实现并安装 `dsh-xprint-panel/`（DSH 左侧栏只读面板）。实测后认为价值不足——对话流里已有 `model_preview` 的四视图 PNG，面板只是同一数据的第二视图，却多一个 8765 进程和一套 CORS / 凭据边界。面板已卸载、源码已删除（历史见 [PLAN §17](docs/PLAN.md)）；3D 交互改由这个自包含 HTML 承担，不需要 DSH 客户端插件。
 
 ## 两条建模路径
 
@@ -335,6 +316,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 | `model_write` | 是 | 存入 build123d 脚本（新建或追加版本，可带 reference）；`confirm` 精确为 `WRITE <name>` / `WRITE <asset_id>` |
 | `model_build` | 是 | 沙箱执行某版本，返回 geometry checks 并存 STL/STEP；`confirm` 精确为 `BUILD <asset_id>` |
 | `model_preview` | 否* | 四视图 PNG（含概念图对比）内联返回；只写 `cache/previews/`，不改资产 |
+| `model_view` | 是 | 把已构建版本写成单文件交互式 3D 查看器（WebGL，旋转/缩放/平移/自旋/截图）；`confirm` 精确为 `VIEW <asset_id>` |
 | `asset_export` | 是 | 把 STL/STEP/脚本复制到用户可打开的位置；`confirm` 精确为 `EXPORT <asset_id>` |
 | `slice_capabilities` | 否 | 列出 targets、slicer 版本、预设是否解析、bed |
 | `slice_plan` | 否 | 切片 dry-run：presets、命令、checks、确认串；不写文件 |
@@ -367,7 +349,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 .venv/bin/python -m ruff format src tests
 ```
 
-测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`asset_export`/`reference_import`/`blender_run`/`generate_local`/`generate_cloud`、MCP stdio 握手与 HTTP Bearer 鉴权、打印机适配器（respx 模拟 Moonraker/OctoPrint：状态映射、上传、启动、取消、401、不可达）与 `printer_*`/`send` 工具（忙碌拒绝、型号不匹配、确认串、异步上传启动）。
+测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、交互式查看器（几何内嵌、标题转义、面数上限）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`model_view`/`asset_export`/`reference_import`/`blender_run`/`generate_local`/`generate_cloud`、MCP stdio 握手与 HTTP Bearer 鉴权、打印机适配器（respx 模拟 Moonraker/OctoPrint：状态映射、上传、启动、取消、401、不可达）与 `printer_*`/`send` 工具（忙碌拒绝、型号不匹配、确认串、异步上传启动）。
 
 ## 目录
 
@@ -375,8 +357,8 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 XPrint/
   pyproject.toml
   src/xprint/
-    server.py          # MCP 入口（stdio / streamable HTTP）+ 24 个工具
-    cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|image|preview
+    server.py          # MCP 入口（stdio / streamable HTTP）+ 25 个工具
+    cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|view|image|preview
     config.py          # config.json / secrets / 环境变量优先级
     workspace.py       # ~/.xprint 布局 + safe_path 沙箱
     jobs.py            # 任务状态机与 job.json
@@ -391,7 +373,6 @@ XPrint/
     script_policy.py   # build123d 脚本静态审查
     errors.py          # 统一错误码
   dsh-xprint-mcp/      # DSH 配置文件型 bundle（stdio 工具）
-  dsh-xprint-panel/    # DSH 客户端插件（左侧栏只读面板）
   tests/
   docs/
 ```
@@ -409,7 +390,7 @@ XPrint/
 | 切片（G-code） | ✅ `slice_*` 四件套，外部 OrcaSlicer，异步任务 + 统计 |
 | 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert；9 工具头 preflight |
 | 切片后发送打印机 | ✅ Moonraker / OctoPrint / Bambu LAN / PrusaLink / 声明式 HTTP 适配器，`send`（上传+启动）与 `printer_cancel`；Snapmaker U1 真机打印完成（25 层 / 325 s）；Bambu 与 PrusaLink 未真机验证 |
-| DSH 左侧栏面板 | ✅ `dsh-xprint-panel/` 只读面板：资产列表、概念图/渲染对照、任务计数；回环 HTTP，不写工作区 |
+| 交互式 3D 查看 | ✅ `model_view` 导出单文件 `viewer.html`：WebGL 旋转/缩放/平移/自旋/截图，无外部依赖 |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。
 - **M0.5（完成，2026-11-14）**：沙箱化 build123d 执行器、概念图生成、四视图预览、两条建模闭环、导出、11 个工具。
@@ -417,4 +398,4 @@ XPrint/
 - **M1（完成，2026-11-14）**：云端文/图生 3D（Tripo V3、混元 3D Pro）异步任务、下载与 STL 转换，14 个工具。
 - **M2（完成，2026-11-14）**：切片器适配（Orca 外部进程，profile 运行时读取，overrides 私有副本）、`slice_capabilities`/`slice_plan`/`slice_run`/`slice_inspect`、G-code 与 statistics 双源元数据，18 个工具。Snapmaker U1 因厂商 CLI 段错误暂不可用。
 - **M3（完成，2026-11-14）**：打印机 CRUD、Moonraker/OctoPrint/Bambu LAN/PrusaLink/声明式 HTTP 适配器、`send` 上传+启动、`printer_cancel`，24 个工具；Snapmaker U1 真机完成切片→上传→打印（25 层 / 325 s / 662 mm）。Bambu 与 PrusaLink 只有单元测试。
-- **M3.5（完成，2026-11-14）**：DSH 左侧栏只读面板（`dsh-xprint-panel/`）与其回环 HTTP 桥；面板不增加 MCP 工具。
+- **M3.5（已移除，2026-11-14）**：曾实现并安装 DSH 左侧栏只读面板；因与对话流里的 `model_preview` 重复、维护成本高，当日卸载并删除。交互式 3D 改由 `model_view` 的单文件 HTML 提供，25 个工具。
