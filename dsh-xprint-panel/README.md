@@ -20,8 +20,9 @@ XPrint 的 DSH 客户端面板：左侧栏一个立方体图标，点开是本�
 plugin_manager install_bundle target: /Users/macadmin/XPrint/dsh-xprint-panel
 ```
 
-或者 GUI 的 **Plugins → Add plugin**。安装是 profile 级操作，装完后需要重启
-DSH（或让本次运行重新加载 profile）才能在左侧栏看到图标。
+或者 GUI 的 **Plugins → Add plugin**。安装是 profile 级操作，DSH 会把新的客户端
+模块推给已打开的页面；如果图标没有立刻出现，刷新一次页面即可（只有替换已安装包
+的代码时才需要重启）。
 
 ## 配置
 
@@ -39,5 +40,8 @@ DSH（或让本次运行重新加载 profile）才能在左侧栏看到图标。
 - 面板是只读的：写资产、切片、发送打印仍然走会话里的工具和 `confirm` 字符串。
 - 8765 端口只绑定 `127.0.0.1`；Host 半会删掉继承来的 `XPRINT_TOKEN`，因为浏览器
   半没有凭证。要跨机器访问请自行加认证，不要直接把端口暴露到局域网。
+- 如果 `secrets.json` 里配置了 `server.token`（或运行环境带 `XPRINT_TOKEN`），
+  HTTP 端点会要求 Bearer 认证，而浏览器半没有凭证；把该 token 去掉或改用
+  stdio/`mcp-manager` 路径。
 - 如果 8765 已被占用，Host 半的 uvicorn 会退出，面板连已有的服务；这适合手动
   调试，但两个进程的工作区必须一致。

@@ -35,5 +35,13 @@
   "footer": "只读视图。建模与打印在会话中通过 mcp__xprint__ 工具完成。",
   "loadFailed": "无法读取 XPrint 数据",
   "unknownError": "未知错误",
-  "latest": "最新"
+  "latest": "最新",
+  "rev": "版",
+  "yes": "是",
+  "no": "否",
+  "starting": "正在启动 XPrint…",
+  "startingBody": "面板会请求 DSH 启动本地桥接服务，通常只需一秒。",
+  "refreshFailed": "刷新失败",
+  "queued": "排队",
+  "failed": "失败"
 }

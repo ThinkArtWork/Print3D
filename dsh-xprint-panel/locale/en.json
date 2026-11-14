@@ -2,7 +2,7 @@
   "meta": {
     "title": "XPrint",
     "description": "Local 3D-printing workspace: models, concept images and rendered previews, straight from the XPrint MCP server.",
-    "detail": "docs/DETAIL.md"
+    "detail": "docs/DETAIL.en.md"
   },
   "panel": "XPrint",
   "title": "XPrint",
@@ -35,5 +35,13 @@
   "footer": "Read-only view. Modelling and printing run through the mcp__xprint__ tools in chat.",
   "loadFailed": "Could not load XPrint data",
   "unknownError": "Unknown error",
-  "latest": "latest"
+  "latest": "latest",
+  "rev": "rev",
+  "yes": "yes",
+  "no": "no",
+  "starting": "Starting XPrint…",
+  "startingBody": "The panel asks DSH to start the local bridge. This usually takes a second.",
+  "refreshFailed": "Could not refresh",
+  "queued": "queued",
+  "failed": "failed"
 }

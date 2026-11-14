@@ -51,6 +51,14 @@ window.__ModuleLoader__.load({
       loadFailed: 'Could not load XPrint data',
       unknownError: 'Unknown error',
       latest: 'latest',
+      rev: 'rev',
+      yes: 'yes',
+      no: 'no',
+      starting: 'Starting XPrint…',
+      startingBody: 'The panel asks DSH to start the local bridge. This usually takes a second.',
+      refreshFailed: 'Could not refresh',
+      queued: 'queued',
+      failed: 'failed',
     }
 
     const zh = {
@@ -86,6 +94,14 @@ window.__ModuleLoader__.load({
       loadFailed: '无法读取 XPrint 数据',
       unknownError: '未知错误',
       latest: '最新',
+      rev: '版',
+      yes: '是',
+      no: '否',
+      starting: '正在启动 XPrint…',
+      startingBody: '面板会请求 DSH 启动本地桥接服务，通常只需一秒。',
+      refreshFailed: '刷新失败',
+      queued: '排队',
+      failed: '失败',
     }
 
     let sessionId = null
@@ -471,13 +487,54 @@ window.__ModuleLoader__.load({
         overflowX: 'auto',
         whiteSpace: 'pre',
       },
-      errorText: { fontSize: 12, color: 'var(--dsw-alias-label-error)', lineHeight: '18px' },
+      errorText: { fontSize: 12, color: 'var(--dsw-alias-state-error-primary)', lineHeight: '18px' },
+      notice: {
+        margin: '0 16px 10px',
+        padding: '7px 10px',
+        borderRadius: 7,
+        border: '1px solid var(--dsw-alias-border-l2)',
+        background: 'var(--dsw-alias-bg-layer-1)',
+        color: 'var(--dsw-alias-state-warn-primary)',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      connectingWrap: {
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+      },
+      connectingCard: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 10,
+        maxWidth: 360,
+        textAlign: 'center',
+        color: 'var(--dsw-alias-label-tertiary)',
+        fontSize: 12,
+        lineHeight: '18px',
+      },
     }
 
     const hoverCss = `
+      .xp-root { box-sizing: border-box; padding-top: var(--dsh-frame-top-clearance, 0px); }
       .xp-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
       .xp-btn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
       .xp-btn:focus-visible, .xp-row:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+      @media (max-width: 760px) {
+        .xp-root { flex-direction: column; }
+        .xp-aside {
+          width: 100% !important;
+          min-width: 0 !important;
+          max-width: none !important;
+          max-height: 44%;
+          border-right: none !important;
+          border-bottom: 1px solid var(--dsw-alias-border-l2);
+        }
+        .xp-main { min-height: 0; }
+      }
     `
 
     function XPrintPanel({ t }) {
@@ -491,50 +548,76 @@ window.__ModuleLoader__.load({
       const [preview, setPreview] = useState(null)
       const [previewError, setPreviewError] = useState('')
       const [previewLoading, setPreviewLoading] = useState(false)
+      const [notice, setNotice] = useState('')
       const retryTimer = useRef(null)
       const retries = useRef(0)
+      const mounted = useRef(true)
+      const loaded = useRef(false)
+      const previewSeq = useRef(0)
+      const tRef = useRef(t)
+      tRef.current = t
+
+      useEffect(() => {
+        mounted.current = true
+        return () => {
+          mounted.current = false
+          if (retryTimer.current) clearTimeout(retryTimer.current)
+        }
+      }, [])
 
       const refresh = useCallback(async () => {
+        if (!mounted.current) return
         if (retryTimer.current) {
           clearTimeout(retryTimer.current)
           retryTimer.current = null
         }
         setBusy(true)
-        setError('')
         try {
           const [nextStatus, listing] = await Promise.all([
             callTool('system_status'),
             callTool('asset_list', { limit: 50 }),
           ])
+          if (!mounted.current) return
+          loaded.current = true
           setStatus(nextStatus)
-          setAssets(Array.isArray(listing.assets) ? listing.assets : [])
+          const list = Array.isArray(listing.assets) ? [...listing.assets] : []
+          list.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+          setAssets(list)
           setPhase('ready')
+          setError('')
+          setNotice('')
           retries.current = 0
         } catch (cause) {
-          setPhase('error')
-          setError(messageOf(cause))
+          if (!mounted.current) return
+          const message = messageOf(cause)
           // The Host half starts the bridge alongside the page; give it a few
           // seconds to bind before settling on the offline card.
-          if (retries.current < 8) {
+          if (loaded.current) {
+            setPhase('ready')
+            setNotice(`${tRef.current('refreshFailed')}: ${message}`)
+          } else if (retries.current < 8) {
             retries.current += 1
+            setPhase('connecting')
             retryTimer.current = setTimeout(() => {
               retryTimer.current = null
               refresh()
             }, 3000)
+          } else {
+            setPhase('error')
+            setError(message)
           }
         } finally {
-          setBusy(false)
+          if (mounted.current) setBusy(false)
         }
       }, [])
 
       useEffect(() => {
         refresh()
-        return () => {
-          if (retryTimer.current) clearTimeout(retryTimer.current)
-        }
       }, [refresh])
 
       const openAsset = useCallback(async asset => {
+        const seq = previewSeq.current + 1
+        previewSeq.current = seq
         setSelected(asset)
         setDetail(null)
         setPreview(null)
@@ -542,6 +625,7 @@ window.__ModuleLoader__.load({
         setPreviewLoading(true)
         try {
           const result = await callToolRaw('model_preview', { asset_id: asset.asset_id })
+          if (!mounted.current || seq !== previewSeq.current) return
           const payload = payloadOf(result)
           if (payload.ok === false) {
             const failure = payload.error || {}
@@ -555,11 +639,17 @@ window.__ModuleLoader__.load({
             setPreview(imagesOf(result))
           }
         } catch (cause) {
+          if (!mounted.current || seq !== previewSeq.current) return
           setPreviewError(messageOf(cause))
         } finally {
-          setPreviewLoading(false)
+          if (mounted.current && seq === previewSeq.current) setPreviewLoading(false)
         }
       }, [t])
+
+      // Open the newest asset once data arrives so the render is visible immediately.
+      useEffect(() => {
+        if (phase === 'ready' && !selected && assets.length > 0) openAsset(assets[0])
+      }, [phase, assets, selected, openAsset])
 
       const dotColor = phase === 'ready'
         ? 'var(--dsw-alias-state-success-primary)'
@@ -567,10 +657,29 @@ window.__ModuleLoader__.load({
           ? 'var(--dsw-alias-state-warn-primary)'
           : 'var(--dsw-alias-state-error-primary)'
 
+      if (phase === 'connecting' && !status) {
+        return h(
+          'div',
+          { style: styles.root, className: 'xp-root' },
+          h('style', null, hoverCss),
+          h(
+            'div',
+            { style: styles.connectingWrap },
+            h(
+              'div',
+              { style: styles.connectingCard },
+              h('span', { style: { color: 'var(--dsw-alias-label-tertiary)' } }, h(CubeIcon, { size: 30 })),
+              h('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 500, fontSize: 13 } }, t('starting')),
+              h('div', null, t('startingBody')),
+            ),
+          ),
+        )
+      }
+
       if (phase === 'error') {
         return h(
           'div',
-          { style: styles.root },
+          { style: styles.root, className: 'xp-root' },
           h('style', null, hoverCss),
           h(
             'div',
@@ -598,13 +707,19 @@ window.__ModuleLoader__.load({
         )
       }
 
+      const jobs = (status && status.jobs) || {}
+      const jobBits = [`${jobs.running || 0} ${t('running')}`]
+      if (jobs.queued) jobBits.push(`${jobs.queued} ${t('queued')}`)
+      if (jobs.failed) jobBits.push(`${jobs.failed} ${t('failed')}`)
+      jobBits.push(`${jobs.succeeded || 0} ${t('succeeded')}`)
+
       return h(
         'div',
-        { style: styles.root },
+        { style: styles.root, className: 'xp-root' },
         h('style', null, hoverCss),
         h(
           'aside',
-          { style: styles.aside },
+          { style: styles.aside, className: 'xp-aside' },
           h(
             'div',
             { style: styles.head },
@@ -619,15 +734,17 @@ window.__ModuleLoader__.load({
               onClick: refresh,
               disabled: busy,
               title: t('refresh'),
+              'aria-label': t('refresh'),
             }, busy ? '…' : '↻'),
           ),
           h(
             'div',
-            { style: styles.statusRow },
+            { style: styles.statusRow, 'aria-live': 'polite' },
             h('span', { style: { ...styles.dot, background: dotColor } }),
             h('span', null, phase === 'ready' ? t('connected') : t('connecting')),
             status ? h('span', { style: { color: 'var(--dsw-alias-label-tertiary)' } }, ` · v${status.version || ''}`) : null,
           ),
+          notice ? h('div', { style: styles.notice, role: 'status' }, notice) : null,
           status
             ? h(
               'div',
@@ -637,7 +754,7 @@ window.__ModuleLoader__.load({
                 h('span', { style: styles.mono, title: status.workspace && status.workspace.root }, (status.workspace && status.workspace.root) || '—')),
               h('div', { style: styles.statRow },
                 h('span', { style: styles.statLabel }, t('jobs')),
-                h('span', null, `${status.jobs ? status.jobs.running : 0} ${t('running')} · ${status.jobs ? status.jobs.succeeded : 0} ${t('succeeded')}`)),
+                h('span', null, jobBits.join(' · '))),
               h('div', { style: styles.statRow },
                 h('span', { style: styles.statLabel }, t('assets')),
                 h('span', null, String(assets.length))),
@@ -662,17 +779,18 @@ window.__ModuleLoader__.load({
                     ...(selected && selected.asset_id === asset.asset_id ? styles.rowActive : {}),
                   },
                   onClick: () => openAsset(asset),
+                  'aria-pressed': Boolean(selected && selected.asset_id === asset.asset_id),
                 },
                 h('span', { style: styles.rowName }, asset.name || asset.asset_id),
                 h('span', { style: styles.rowMeta },
-                  `${asset.revisions} rev · ${when(asset.updated_at)}`),
+                  `${asset.revisions} ${t('rev')} · ${when(asset.updated_at)}`),
               )),
           ),
           h('div', { style: styles.foot }, t('footer')),
         ),
         h(
           'section',
-          { style: styles.main },
+          { style: styles.main, className: 'xp-main' },
           selected
             ? h(
               'div',
@@ -704,6 +822,7 @@ window.__ModuleLoader__.load({
                           src,
                           alt: index === 0 && preview.length > 1 ? t('concept') : t('render'),
                           style: styles.image,
+                          onError: () => setPreviewError(t('previewFailed')),
                         }),
                         h('div', { style: styles.caption },
                           preview.length > 1
@@ -719,7 +838,7 @@ window.__ModuleLoader__.load({
                   h('span', { style: styles.metaKey }, t('views')),
                   h('span', { style: styles.metaValue }, String(detail.views || '—')),
                   h('span', { style: styles.metaKey }, t('cached')),
-                  h('span', { style: styles.metaValue }, detail.cached ? 'yes' : 'no'),
+                  h('span', { style: styles.metaValue }, detail.cached ? t('yes') : t('no')),
                   detail.reference
                     ? [h('span', { key: 'rk', style: styles.metaKey }, t('reference')),
                       h('span', { key: 'rv', style: styles.metaValue }, String(detail.reference))]
