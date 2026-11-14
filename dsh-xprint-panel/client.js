@@ -65,6 +65,8 @@ window.__ModuleLoader__.load({
       refreshFailed: 'Could not refresh',
       queued: 'queued',
       failed: 'failed',
+      autoRefresh: 'Auto-refresh every 2.5 s',
+      synced: 'synced',
       crash: 'XPrint panel crashed',
       crashBody: 'The panel failed to render. Open developer tools to see the full error.',
     }
@@ -110,6 +112,8 @@ window.__ModuleLoader__.load({
       refreshFailed: '刷新失败',
       queued: '排队',
       failed: '失败',
+      autoRefresh: '每 2.5 秒自动刷新',
+      synced: '同步于',
       crash: 'XPrint 面板出错',
       crashBody: '面板渲染失败，打开开发者工具可以看到完整错误。',
     }
@@ -618,11 +622,13 @@ window.__ModuleLoader__.load({
       const [previewError, setPreviewError] = useState('')
       const [previewLoading, setPreviewLoading] = useState(false)
       const [notice, setNotice] = useState('')
+      const [syncedAt, setSyncedAt] = useState('')
       const retryTimer = useRef(null)
       const retries = useRef(0)
       const mounted = useRef(true)
       const loaded = useRef(false)
       const previewSeq = useRef(0)
+      const assetSig = useRef('')
       const tRef = useRef(t)
       tRef.current = t
 
@@ -634,13 +640,13 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      const refresh = useCallback(async () => {
+      const refresh = useCallback(async (quiet = false) => {
         if (!mounted.current) return
         if (retryTimer.current) {
           clearTimeout(retryTimer.current)
           retryTimer.current = null
         }
-        setBusy(true)
+        if (!quiet) setBusy(true)
         try {
           const [nextStatus, listing] = await Promise.all([
             callTool('system_status'),
@@ -655,6 +661,7 @@ window.__ModuleLoader__.load({
           setPhase('ready')
           setError('')
           setNotice('')
+          setSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
           retries.current = 0
         } catch (cause) {
           if (!mounted.current) return
@@ -676,7 +683,7 @@ window.__ModuleLoader__.load({
             setError(message)
           }
         } finally {
-          if (mounted.current) setBusy(false)
+          if (mounted.current && !quiet) setBusy(false)
         }
       }, [])
 
@@ -687,6 +694,7 @@ window.__ModuleLoader__.load({
       const openAsset = useCallback(async asset => {
         const seq = previewSeq.current + 1
         previewSeq.current = seq
+        assetSig.current = `${asset.revisions}:${asset.updated_at || ''}`
         setSelected(asset)
         setDetail(null)
         setPreview(null)
@@ -719,6 +727,29 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (phase === 'ready' && !selected && assets.length > 0) openAsset(assets[0])
       }, [phase, assets, selected, openAsset])
+
+      // Keep the panel in step with the agent: a build that lands in chat shows
+      // up here without a manual refresh, and a new revision re-renders itself.
+      useEffect(() => {
+        if (phase !== 'ready') return undefined
+        const tick = () => {
+          if (document.visibilityState !== 'hidden') refresh(true)
+        }
+        const timer = setInterval(tick, 2500)
+        document.addEventListener('visibilitychange', tick)
+        return () => {
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', tick)
+        }
+      }, [phase, refresh])
+
+      useEffect(() => {
+        if (!selected) return
+        const fresh = assets.find(item => item.asset_id === selected.asset_id)
+        if (!fresh) return
+        const sig = `${fresh.revisions}:${fresh.updated_at || ''}`
+        if (sig !== assetSig.current) openAsset(fresh)
+      }, [assets, selected, openAsset])
 
       const dotColor = phase === 'ready'
         ? 'var(--dsw-alias-state-success-primary)'
@@ -803,7 +834,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'xp-btn',
               style: styles.button,
-              onClick: refresh,
+              onClick: () => refresh(),
               disabled: busy,
               title: t('refresh'),
               'aria-label': t('refresh'),
@@ -858,7 +889,10 @@ window.__ModuleLoader__.load({
                   `${asset.revisions} ${t('rev')} · ${when(asset.updated_at)}`),
               )),
           ),
-          h('div', { style: styles.foot }, t('footer')),
+          h('div', { style: styles.foot },
+            h('div', null, t('footer')),
+            h('div', { 'aria-live': 'polite' },
+              `${t('autoRefresh')}${syncedAt ? ` · ${t('synced')} ${syncedAt}` : ''}`)),
         ),
         h(
           'section',

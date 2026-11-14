@@ -43,5 +43,7 @@
   "startingBody": "The panel asks DSH to start the local bridge. This usually takes a second.",
   "refreshFailed": "Could not refresh",
   "queued": "queued",
-  "failed": "failed"
+  "failed": "failed",
+  "autoRefresh": "Auto-refresh every 2.5 s",
+  "synced": "synced"
 }

@@ -43,5 +43,7 @@
   "startingBody": "面板会请求 DSH 启动本地桥接服务，通常只需一秒。",
   "refreshFailed": "刷新失败",
   "queued": "排队",
-  "failed": "失败"
+  "failed": "失败",
+  "autoRefresh": "每 2.5 秒自动刷新",
+  "synced": "同步于"
 }
