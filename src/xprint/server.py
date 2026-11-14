@@ -28,7 +28,15 @@ from .blender_policy import check_blender_script
 from .cad import run_script
 from .capabilities import build_capabilities, build_system_status
 from .cloud import build_provider, download_model, to_stl
-from .config import ImageProviderSettings, LoadedConfig, Secrets, load_all
+from .config import (
+    ImageProviderSettings,
+    LoadedConfig,
+    PrinterSettings,
+    Secrets,
+    load_all,
+    remove_printer,
+    save_printer,
+)
 from .errors import (
     AdapterUnavailable,
     ConfigError,
@@ -44,6 +52,7 @@ from .local_mesh import DEFAULT_TIMEOUT_S as LOCAL_GENERATION_TIMEOUT
 from .local_mesh import run_local
 from .mesh import stats_for_stl
 from .preview import DEFAULT_VIEWS, render_views
+from .printers import PRINTER_ADAPTERS, build_printer, validate_printer_id
 from .registry import Registry, builtin_registry
 from .runner import JobRunner
 from .script_policy import check_script, summarise
@@ -109,6 +118,13 @@ Two extra engines reuse the same asset + preview loop:
   produced asset.  XPrint downloads no weights and calls no cloud API.
 
 Both accept `image=` for image-driven work; assets remember the reference.
+
+Once the model is accepted, slice it for a configured target: `slice_plan` is a
+read-only dry run that prints the exact confirm string; `slice_run` produces
+G-code asynchronously (poll `job_status`, then `slice_inspect`).  To print,
+`send` uploads the G-code to a configured printer and starts it by default;
+`printer_status` and `printer_cancel` cover the live state, while
+`printer_list`/`printer_save`/`printer_remove` manage the printer list.
 """
 
 
@@ -232,6 +248,17 @@ def _reference_meta(rt: Runtime, path: Path) -> dict[str, Any]:
         if isinstance(data, dict):
             return data
     return {"source_path": rt.workspace.rel(path)}
+
+
+def _printer_entry(rt: Runtime, printer_id: str):
+    for entry in rt.loaded.config.printers:
+        if entry.id == printer_id:
+            return entry
+    known = ", ".join(entry.id for entry in rt.loaded.config.printers) or "(none)"
+    raise NotFound(
+        f"Unknown printer: {printer_id}",
+        hint=f"Configured printers: {known}. Add one with printer_save.",
+    )
 
 
 def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> FastMCP:
@@ -1365,6 +1392,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 warnings.append(
                     "overrides are applied to a private copy of the vendor presets at slice time"
                 )
+            if bed is None:
+                warnings.append(
+                    "bed size is not in the machine preset (it may be inherited); "
+                    "slice_run reads it from the produced G-code instead"
+                )
             if bed and checks.get("bbox_mm"):
                 width, depth = bed
                 bbox = checks["bbox_mm"]
@@ -1549,6 +1581,294 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "slice": record,
                 "directory": str(directory),
                 "gcode": gcode_payload or None,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="printer_list",
+        description=(
+            "List configured printers with adapter, model, address, toolheads and "
+            "whether an API key is available. Read-only (no network probe)."
+        ),
+    )
+    def printer_list() -> dict[str, Any]:
+        try:
+            entries = []
+            for entry in rt.loaded.config.printers:
+                key = rt.secrets.provider_key(entry.id, api_key_env=entry.api_key_env)
+                entries.append(
+                    {
+                        "id": entry.id,
+                        "adapter": entry.adapter,
+                        "adapter_known": entry.adapter.lower() in PRINTER_ADAPTERS,
+                        "model": entry.model,
+                        "base_url": entry.base_url,
+                        "toolheads": entry.toolheads,
+                        "enabled": entry.enabled,
+                        "has_key": bool(key),
+                        "key_source": rt.secrets.key_source(
+                            entry.id, api_key_env=entry.api_key_env
+                        ),
+                    }
+                )
+            return {
+                "ok": True,
+                "writes_performed": False,
+                "printers": entries,
+                "count": len(entries),
+                "config_path": str(rt.loaded.path or rt.workspace.config_path),
+                "hint": (
+                    "Call printer_status(id) to test a connection, or printer_save to "
+                    "add or update one."
+                ),
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="printer_status",
+        description=(
+            "Query one printer's live state (state, filename, progress, temperatures) "
+            "through its adapter. Read-only."
+        ),
+    )
+    def printer_status(printer_id: str) -> dict[str, Any]:
+        try:
+            validate_printer_id(printer_id)
+            entry = _printer_entry(rt, printer_id)
+            adapter = build_printer(entry, secrets=rt.secrets)
+            state = adapter.status()
+            return {
+                "ok": True,
+                "writes_performed": False,
+                "printer": {
+                    "id": entry.id,
+                    "adapter": entry.adapter,
+                    "model": entry.model,
+                    "base_url": entry.base_url,
+                },
+                "state": state.to_dict(),
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="printer_save",
+        description=(
+            "Add or update a printer in config.json (upsert). WRITES the config: "
+            "confirm must be exactly 'SAVE PRINTER <printer_id>'. Supported adapters: "
+            "moonraker (Klipper, default port 7125) and octoprint (port 80/443)."
+        ),
+    )
+    def printer_save(
+        printer_id: str,
+        confirm: str,
+        adapter: str = "moonraker",
+        base_url: str = "",
+        model: str = "",
+        toolheads: int = 1,
+        api_key_env: str = "",
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            validate_printer_id(printer_id)
+            expected = f"SAVE PRINTER {printer_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            chosen = (adapter or "").lower()
+            if chosen not in PRINTER_ADAPTERS:
+                raise InvalidArgument(
+                    f"Unknown printer adapter: {adapter}",
+                    hint=f"Supported adapters: {', '.join(PRINTER_ADAPTERS)}",
+                )
+            if not base_url.strip():
+                raise InvalidArgument(
+                    "base_url is required",
+                    hint=("Moonraker: http://printer.local:7125 ; OctoPrint: http://printer.local"),
+                )
+            if not 1 <= int(toolheads) <= 4:
+                raise InvalidArgument("toolheads must be between 1 and 4")
+            entry = PrinterSettings(
+                id=printer_id,
+                adapter=chosen,
+                base_url=base_url.strip(),
+                model=model.strip() or None,
+                toolheads=int(toolheads),
+                enabled=bool(enabled),
+                api_key_env=api_key_env.strip() or None,
+            )
+            path = save_printer(rt.loaded, entry)
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "printer": entry.model_dump(mode="json", exclude_none=True),
+                "config_path": str(path),
+                "hint": f"Call printer_status({printer_id!r}) to test the connection.",
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="printer_remove",
+        description=(
+            "Remove a printer from config.json. WRITES the config: confirm must be "
+            "exactly 'REMOVE PRINTER <printer_id>'."
+        ),
+    )
+    def printer_remove(printer_id: str, confirm: str) -> dict[str, Any]:
+        try:
+            validate_printer_id(printer_id)
+            expected = f"REMOVE PRINTER {printer_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            _printer_entry(rt, printer_id)
+            path = remove_printer(rt.loaded, printer_id)
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "printer_id": printer_id,
+                "config_path": str(path),
+                "hint": "printer_list shows the remaining printers.",
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="send",
+        description=(
+            "Upload a successful slice's G-code to a printer and, by default, start "
+            "the print. The printer must be idle and its model must match the slice "
+            "target. confirm must be exactly 'PRINT <printer_id> <slice_id>'. Runs as "
+            "an async job (poll job_status)."
+        ),
+    )
+    def send(
+        slice_id: str,
+        printer_id: str,
+        confirm: str,
+        start: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            validate_slice_id(slice_id)
+            validate_printer_id(printer_id)
+            expected = f"PRINT {printer_id} {slice_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            store = SliceStore(rt.workspace)
+            record = store.load(slice_id)
+            if not record.get("ok"):
+                raise InvalidArgument(
+                    f"Slice {slice_id} did not succeed; nothing to send",
+                    details={"error": record.get("error")},
+                    hint="Fix the model or target and call slice_run again.",
+                )
+            gcode_name = (record.get("gcode") or {}).get("file")
+            if not gcode_name:
+                raise NotFound(
+                    f"Slice {slice_id} has no G-code recorded",
+                    hint="Slice again with slice_run.",
+                )
+            gcode = store.directory(slice_id) / gcode_name
+            if not gcode.is_file():
+                raise NotFound(
+                    f"G-code file is missing: {gcode}",
+                    hint="Slice again; the file may have been removed.",
+                )
+            entry = _printer_entry(rt, printer_id)
+            sliced_for = record.get("printer_model")
+            if entry.model and sliced_for and entry.model != sliced_for:
+                raise InvalidArgument(
+                    f"Slice was made for {sliced_for!r} but printer {printer_id} is "
+                    f"{entry.model!r}",
+                    hint="Slice with a target whose printer_model matches this printer.",
+                )
+            adapter = build_printer(entry, secrets=rt.secrets)
+            state = adapter.status()
+            if state.busy:
+                raise InvalidArgument(
+                    f"Printer {printer_id} is busy ({state.state})",
+                    hint="Wait for it to finish, or call printer_cancel first.",
+                )
+            remote_name = f"{slice_id}.gcode"
+            runner = rt.runner
+            if runner is None:  # pragma: no cover - Runtime always builds one
+                raise ConfigError("No job runner is available")
+
+            def work(job_id: str) -> dict[str, Any]:
+                rt.store.set_progress(job_id, 0.2, message="uploading G-code")
+                uploaded = adapter.upload(gcode, name=remote_name)
+                rt.store.set_progress(job_id, 0.7, message="starting print")
+                if start:
+                    adapter.start(uploaded)
+                return {
+                    "printer_id": printer_id,
+                    "slice_id": slice_id,
+                    "filename": uploaded,
+                    "started": bool(start),
+                    "printer_state_before": state.to_dict(),
+                    "bytes": gcode.stat().st_size,
+                    "sha256": sha256_file(gcode),
+                }
+
+            job = runner.submit(
+                "print.send",
+                work,
+                params={
+                    "printer_id": printer_id,
+                    "slice_id": slice_id,
+                    "start": bool(start),
+                },
+                provider=printer_id,
+            )
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "job_id": job.id,
+                "printer_id": printer_id,
+                "slice_id": slice_id,
+                "filename": remote_name,
+                "started": bool(start),
+                "printer_state": state.to_dict(),
+                "hint": f"Poll job_status({job.id!r}) for the upload/start result.",
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="printer_cancel",
+        description=(
+            "Cancel the current print on a printer. WRITES to the printer: confirm "
+            "must be exactly 'CANCEL PRINT <printer_id>'."
+        ),
+    )
+    def printer_cancel(printer_id: str, confirm: str) -> dict[str, Any]:
+        try:
+            validate_printer_id(printer_id)
+            expected = f"CANCEL PRINT {printer_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            entry = _printer_entry(rt, printer_id)
+            adapter = build_printer(entry, secrets=rt.secrets)
+            adapter.cancel()
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "printer_id": printer_id,
+                "cancelled": True,
+                "hint": f"Call printer_status({printer_id!r}) to confirm it is idle.",
             }
         except XPrintError as exc:
             return tool_error(exc)

@@ -107,6 +107,9 @@ class PrinterSettings(BaseModel):
     adapter: str
     base_url: str | None = None
     toolheads: int = Field(default=1, ge=1, le=4)
+    enabled: bool = True
+    api_key_env: str | None = None
+    timeout_s: float = Field(default=30.0, gt=1, le=300)
 
 
 class Config(BaseModel):
@@ -299,11 +302,51 @@ def write_config(loaded: LoadedConfig, *, force: bool = False) -> Path:
             f"Config already exists: {target}",
             hint="Pass --force to overwrite (a .bak copy is kept).",
         )
+    payload = loaded.config.model_dump(mode="json")
+    _write_config_payload(target, payload)
+    return target
+
+
+def _write_config_payload(target: Path, payload: dict[str, Any]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         backup = target.with_suffix(".json.bak")
         backup.write_text(target.read_text(encoding="utf-8-sig"), encoding="utf-8")
-    payload = loaded.config.model_dump(mode="json")
     atomic_write_text(target, json.dumps(payload, indent=2, ensure_ascii=False) + "\n", mode=0o644)
+
+
+def save_printer(loaded: LoadedConfig, printer: PrinterSettings) -> Path:
+    """Upsert one printer into ``config.json`` and refresh ``loaded``."""
+    data = loaded.config.model_dump(mode="json")
+    printers = [p for p in data.get("printers", []) if p.get("id") != printer.id]
+    printers.append(printer.model_dump(mode="json", exclude_none=True))
+    data["printers"] = printers
+    config = Config.model_validate(data)
+    target = loaded.path or Path(config.workspace).expanduser() / "config.json"
+    _write_config_payload(target, data)
+    loaded.config = config
+    loaded.path = target
+    loaded.exists = True
+    return target
+
+
+def remove_printer(loaded: LoadedConfig, printer_id: str) -> Path:
+    """Remove one printer from ``config.json``; unknown ids are an error."""
+    data = loaded.config.model_dump(mode="json")
+    printers = data.get("printers", [])
+    kept = [p for p in printers if p.get("id") != printer_id]
+    if len(kept) == len(printers):
+        raise ConfigError(
+            f"Unknown printer: {printer_id}",
+            hint=f"Configured printers: {', '.join(p.get('id', '?') for p in printers) or '(none)'}",
+        )
+    data["printers"] = kept
+    config = Config.model_validate(data)
+    target = loaded.path or Path(config.workspace).expanduser() / "config.json"
+    _write_config_payload(target, data)
+    loaded.config = config
+    loaded.path = target
+    loaded.exists = True
     return target
 
 
