@@ -59,19 +59,18 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 ### 交互式 3D 查看
 
-**构建成功时自动生成**：`model_build`、`blender_run`、`generate_local` / `generate_cloud` 任务都会在该版本目录写出 `viewer.html`，返回 `viewer_file`。宿主只需 `present(viewer_file)`，对话里就会出现文件卡。
+**每个资产只有一个查看器文件**：`assets/<asset_id>/viewer.html`。它把该资产**所有已构建版本**的几何一起内嵌，右上角有版本下拉框，默认打开最新一版。所以改到第 10 版，对话里仍然只有一个文件卡，不会堆出一排 `viewer.html`。
 
-只有旧资产或需要重新生成时才手动调用：
+- 构建成功时（`model_build`、`blender_run`、`generate_local` / `generate_cloud`）自动重写这个文件并返回 `viewer_file`；宿主执行 `present(viewer_file)` 即可；
+- 旧资产或需要手动刷新时调用 `model_view(asset_id, confirm="VIEW <asset_id>")`；传 `revision="v001"` 可让查看器默认打开该版本；
+- 命令行：`xprint view <asset_id> [--revision v001] [--open]`。
 
-```
-model_view(asset_id, confirm="VIEW <asset_id>")
-```
+几何以 base64 内嵌，单文件、无 CDN、无服务端。打开后：
 
-（几何以 base64 内嵌，单文件、无 CDN、无服务端），返回绝对路径 `viewer_file`。让宿主执行 `present` 打开它，或直接用浏览器打开：
-
+- 右上角下拉框切换历史版本；
 - 左键拖动旋转，右键 / Shift 拖动平移，滚轮缩放，触控板双指捏合；
-- 双击复位，`自旋` 开关，`截图` 导出 PNG；
-- HUD 显示三角面数、包围盒 mm、体积 cm³。
+- 双击复位，`自旋` 开关，`截图` 导出当前版本 PNG；
+- HUD 显示当前版本的三角面数、包围盒 mm、体积 cm³。
 
 为什么不做侧栏面板：2026-11-14 曾实现并安装 `dsh-xprint-panel/`（DSH 左侧栏只读面板）。实测后认为价值不足——对话流里已有 `model_preview` 的四视图 PNG，面板只是同一数据的第二视图，却多一个 8765 进程和一套 CORS / 凭据边界。面板已卸载、源码已删除（历史见 [PLAN §17](docs/PLAN.md)）；3D 交互改由这个自包含 HTML 承担，不需要 DSH 客户端插件。
 
@@ -340,7 +339,7 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 | `model_write` | 是 | 存入 build123d 脚本（新建或追加版本，可带 reference）；`confirm` 精确为 `WRITE <name>` / `WRITE <asset_id>` |
 | `model_build` | 是 | 沙箱执行某版本，返回 geometry checks，存 STL/STEP 并自动生成 `viewer.html`；`confirm` 精确为 `BUILD <asset_id>` |
 | `model_preview` | 否* | 四视图 PNG（含概念图对比）内联返回；只写 `cache/previews/`，不改资产 |
-| `model_view` | 是 | 把已构建版本写成单文件交互式 3D 查看器（WebGL，旋转/缩放/平移/自旋/截图）；`confirm` 精确为 `VIEW <asset_id>` |
+| `model_view` | 是 | 把资产的全部已构建版本合并成一个交互式 3D 查看器（下拉切换版本，WebGL 旋转/缩放/平移/自旋/截图）；`confirm` 精确为 `VIEW <asset_id>` |
 | `asset_export` | 是 | 把 STL/STEP/脚本复制到用户可打开的位置；`confirm` 精确为 `EXPORT <asset_id>` |
 | `slice_capabilities` | 否 | 列出 targets、slicer 版本、预设是否解析、bed |
 | `slice_plan` | 否 | 切片 dry-run：presets、命令、checks、确认串；不写文件 |

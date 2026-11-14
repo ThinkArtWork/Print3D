@@ -94,10 +94,53 @@ def test_viewer_tool_requires_a_build_and_the_exact_confirm(workspace, tmp_path)
     assert payload["writes_performed"] is True
     assert payload["revision"] == "v001"
     assert payload["triangles"] == 4
-    assert payload["viewer_path"].endswith(f"v001/{VIEWER_FILE}")
+    assert payload["viewer_path"].endswith(f"{asset_id}/{VIEWER_FILE}")
+    assert payload["viewer_revision"] == "v001"
+    assert payload["viewer_revisions"] == 1
+    html = (workspace.root / payload["viewer_path"]).read_text(encoding="utf-8")
+    assert '"revisions"' in html
+    assert '"v001"' in html
     assert (workspace.root / payload["viewer_path"]).is_file()
     assert "present" in payload["hint"]
 
 
 def test_max_is_high_enough_for_normal_parts() -> None:
     assert MAX_VIEW_TRIANGLES >= 150_000
+
+
+def test_collection_viewer_embeds_every_revision_in_one_file(tmp_path) -> None:
+    from xprint.viewer import collection_html, entry_from_stl, write_collection_viewer
+
+    first = tmp_path / "v001.stl"
+    second = tmp_path / "v002.stl"
+    write_stl(first)
+    write_stl(second)
+    entries = [
+        entry_from_stl(first, revision="v001", created_at="2026-11-14T01:00:00Z"),
+        entry_from_stl(second, revision="v002", created_at="2026-11-14T02:00:00Z"),
+    ]
+
+    html = collection_html(
+        entries,
+        title="plate",
+        subtitle="2 revisions",
+        name="plate",
+        selected="v001",
+    )
+    assert 'id="revSel"' in html
+    assert html.count('"revision": "v00') == 3
+    assert '"revision": "v001"' in html  # selected revision wins the default camera
+
+    written = write_collection_viewer(
+        tmp_path / "asset",
+        entries,
+        title="plate",
+        name="plate",
+        selected="v002",
+    )
+    assert written["revisions"] == ["v001", "v002"]
+    assert written["triangles"] == 8
+    target = tmp_path / "asset" / "viewer.html"
+    assert written["path"] == target
+    assert target.is_file()
+    assert '"revision": "v002"' in target.read_text(encoding="utf-8")

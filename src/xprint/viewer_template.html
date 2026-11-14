@@ -77,6 +77,24 @@
   button:hover { background: rgba(255, 255, 255, 0.10); border-color: rgba(255,255,255,0.18); }
   button:active { background: rgba(255, 255, 255, 0.15); }
   button.on { border-color: rgba(232, 132, 90, 0.55); color: var(--accent); }
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--fg);
+    font: inherit;
+    font-size: 12px;
+    padding: 7px 26px 7px 11px;
+    border-radius: 8px;
+    cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+  }
+  select:focus { outline: none; border-color: rgba(232, 132, 90, 0.55); }
   .bottom {
     left: 18px; bottom: 18px;
     padding: 9px 12px;
@@ -123,9 +141,10 @@
     <div class="brand">XPrint</div>
     <div class="who">
       <h1>__TITLE__</h1>
-      <div class="sub">__SUBTITLE__</div>
+      <div class="sub" id="sub">__SUBTITLE__</div>
     </div>
     <div class="actions">
+      <select id="revSel" aria-label="选择版本" hidden></select>
       <button id="reset" type="button" title="恢复初始视角">复位</button>
       <button id="spin" type="button" title="自动缓慢旋转">自旋</button>
       <button id="shot" type="button" title="保存当前视角为 PNG">截图</button>
@@ -142,10 +161,11 @@
   "use strict";
 
   const META = __META_JSON__;
-  const POS = decodeF32("__POSITIONS__");
-  const NRM = decodeF32("__NORMALS__");
+  const REVS = META.revisions || [];
+  let current = Math.max(0, REVS.findIndex((entry) => entry.revision === META.revision));
   const canvas = document.getElementById("c");
   const errBox = document.getElementById("err");
+  const revSel = document.getElementById("revSel");
 
   function decodeF32(b64) {
     const bin = atob(b64);
@@ -170,15 +190,23 @@
     fail("这个浏览器没有可用的 WebGL。\n请打开硬件加速，或用 Chrome / Safari / Firefox 直接打开这个文件。");
     return;
   }
-  if (!POS.length || POS.length % 9 !== 0) {
+  if (!REVS.length || !REVS.every((entry) => entry.pos && entry.nrm)) {
     fail("模型几何为空。请先调用 model_build 再生成 3D 视图。");
     return;
   }
 
-  document.getElementById("stats").innerHTML =
-    "<b>" + META.triangles.toLocaleString() + "</b> 三角面<br>" +
-    "<b>" + META.bbox_mm.join(" × ") + "</b> mm<br>" +
-    "<b>" + META.volume_cm3.toFixed(2) + "</b> cm³";
+  function renderStats(entry) {
+    document.getElementById("stats").innerHTML =
+      "<b>" + entry.triangles.toLocaleString() + "</b> 三角面<br>" +
+      "<b>" + entry.bbox_mm.join(" × ") + "</b> mm<br>" +
+      "<b>" + entry.volume_cm3.toFixed(2) + "</b> cm³";
+  }
+  function renderSubtitle(entry) {
+    const parts = [entry.label || entry.revision];
+    if (entry.created_at) parts.push(entry.created_at.slice(0, 10));
+    parts.push("交互式 3D");
+    document.getElementById("sub").textContent = parts.join(" · ");
+  }
 
   // ---- WebGL setup -------------------------------------------------------
   function compile(type, source) {
@@ -231,20 +259,12 @@
 
   gl.useProgram(program);
   const posBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, POS, gl.STATIC_DRAW);
   const nrmBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, NRM, gl.STATIC_DRAW);
 
   const aPos = gl.getAttribLocation(program, "aPos");
   const aNrm = gl.getAttribLocation(program, "aNrm");
   gl.enableVertexAttribArray(aPos);
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-  gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
   gl.enableVertexAttribArray(aNrm);
-  gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
-  gl.vertexAttribPointer(aNrm, 3, gl.FLOAT, false, 0, 0);
   const uMVP = gl.getUniformLocation(program, "uMVP");
 
   gl.enable(gl.DEPTH_TEST);
@@ -253,8 +273,8 @@
   gl.clearColor(0.055, 0.072, 0.09, 1);
 
   // ---- Camera ------------------------------------------------------------
-  const center = META.center_mm.slice();
-  const size = Math.max(META.bbox_mm[0], META.bbox_mm[1], META.bbox_mm[2], 1);
+  let center = REVS[current].center_mm.slice();
+  let size = Math.max(REVS[current].bbox_mm[0], REVS[current].bbox_mm[1], REVS[current].bbox_mm[2], 1);
   const FOV = 38 * Math.PI / 180;
   const initial = { yaw: 0.72, pitch: 0.42, dist: size * 2.5, target: center.slice() };
   const view = { yaw: initial.yaw, pitch: initial.pitch, dist: initial.dist, target: center.slice() };
@@ -267,6 +287,27 @@
     view.target = center.slice();
     spin = false;
     document.getElementById("spin").classList.remove("on");
+  }
+
+  function loadRevision(index) {
+    const entry = REVS[index];
+    if (!entry) return;
+    current = index;
+    const pos = decodeF32(entry.pos);
+    const nrm = decodeF32(entry.nrm);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(aNrm, 3, gl.FLOAT, false, 0, 0);
+    center = entry.center_mm.slice();
+    size = Math.max(entry.bbox_mm[0], entry.bbox_mm[1], entry.bbox_mm[2], 1);
+    initial.dist = size * 2.5;
+    reset();
+    renderStats(entry);
+    renderSubtitle(entry);
+    if (revSel.value !== entry.revision) revSel.value = entry.revision;
   }
 
   function eye() {
@@ -403,10 +444,25 @@
   });
   document.getElementById("shot").addEventListener("click", () => {
     const link = document.createElement("a");
-    link.download = (META.name || "model") + "-" + META.revision + ".png";
+    link.download = (META.name || "model") + "-" + REVS[current].revision + ".png";
     link.href = canvas.toDataURL("image/png");
     link.click();
   });
+
+  REVS.forEach((entry, index) => {
+    const option = document.createElement("option");
+    option.value = entry.revision;
+    option.textContent = entry.label || entry.revision;
+    option.title = entry.created_at ? entry.created_at.slice(0, 19).replace("T", " ") : "";
+    revSel.appendChild(option);
+  });
+  if (REVS.length > 1) {
+    revSel.hidden = false;
+    revSel.addEventListener("change", () => {
+      const index = REVS.findIndex((entry) => entry.revision === revSel.value);
+      if (index >= 0) loadRevision(index);
+    });
+  }
 
   // ---- Render loop -------------------------------------------------------
   function resize() {
@@ -429,10 +485,11 @@
     const mvp = multiply(perspective(aspect, near, far), lookAt(eye(), view.target));
     gl.uniformMatrix4fv(uMVP, false, mvp);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.drawArrays(gl.TRIANGLES, 0, POS.length / 3);
+    gl.drawArrays(gl.TRIANGLES, 0, REVS[current].triangles * 3);
     requestAnimationFrame(frame);
   }
 
+  loadRevision(current);
   requestAnimationFrame(frame);
 })();
 </script>

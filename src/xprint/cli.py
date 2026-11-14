@@ -269,7 +269,7 @@ def cmd_view(args: argparse.Namespace) -> int:
     import webbrowser
 
     from .assets import AssetStore
-    from .viewer import write_viewer
+    from .viewer import VIEWER_FILE, collection_html, entry_from_stl
 
     ws, _, _ = _load(args)
     assets = AssetStore(ws)
@@ -284,15 +284,46 @@ def cmd_view(args: argparse.Namespace) -> int:
             hint="Call model_build (or `xprint cad run`) first.",
         )
     name = str(manifest.get("name") or args.asset_id)
-    result = write_viewer(
-        stl,
-        out_path=Path(args.out).expanduser() if args.out else None,
+    entries = []
+    for item in manifest.get("revisions", []):
+        revision = str(item.get("revision") or "")
+        model = assets.revision_dir(args.asset_id, revision) / "model.stl"
+        if not model.is_file():
+            continue
+        checks = (item.get("build") or {}).get("checks") or {}
+        entries.append(
+            entry_from_stl(
+                model,
+                revision=revision,
+                created_at=str(item.get("created_at") or ""),
+                volume_mm3=checks.get("volume_mm3"),
+            )
+        )
+    if not entries:
+        raise XPrintError(
+            f"Asset {args.asset_id} has no built revisions",
+            hint="Call model_build (or `xprint cad run`) first.",
+        )
+    html = collection_html(
+        entries,
         title=name,
-        subtitle=f"revision {target} · interactive 3D",
-        revision=target,
+        subtitle=f"{len(entries)} revisions · interactive 3D",
         name=name,
+        selected=target,
     )
-    path = Path(result["path"]).resolve()
+    path = (
+        Path(args.out).expanduser() if args.out else assets.asset_dir(args.asset_id) / VIEWER_FILE
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html, encoding="utf-8")
+    path.chmod(0o644)
+    result = {
+        "path": path,
+        "bytes": len(html.encode("utf-8")),
+        "triangles": sum(entry["triangles"] for entry in entries),
+        "revisions": len(entries),
+    }
+    path = path.resolve()
     if args.open:
         webbrowser.open(path.as_uri())
     _print_json(
@@ -303,6 +334,7 @@ def cmd_view(args: argparse.Namespace) -> int:
             "viewer_path": str(path),
             "bytes": result["bytes"],
             "triangles": result["triangles"],
+            "revisions": result["revisions"],
             "opened": bool(args.open),
         }
     )

@@ -73,7 +73,7 @@ from .slicers import (
     slice_stl,
     validate_slice_id,
 )
-from .viewer import VIEWER_FILE, write_viewer
+from .viewer import entry_from_stl, write_collection_viewer
 from .workspace import Workspace, atomic_write_bytes
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -275,31 +275,53 @@ def _printer_entry(rt: Runtime, printer_id: str):
     )
 
 
-def _auto_viewer(
-    rt: Runtime,
-    stl: Path,
-    *,
-    asset_id: str,
-    revision: str,
-    name: str = "",
-    volume_mm3: float | None = None,
+def _asset_viewer(
+    rt: Runtime, assets: AssetStore, manifest: dict[str, Any], *, selected: str = ""
 ) -> dict[str, Any]:
-    """Best-effort interactive viewer next to a freshly built model.stl."""
+    """Best-effort version-switchable viewer for every built revision of an asset."""
 
+    asset_id = manifest["asset_id"]
+    entries: list[dict[str, Any]] = []
+    for item in manifest.get("revisions", []):
+        revision = str(item.get("revision") or "")
+        if not revision:
+            continue
+        stl = assets.revision_dir(asset_id, revision) / "model.stl"
+        if not stl.is_file():
+            continue
+        checks = (item.get("build") or {}).get("checks") or {}
+        try:
+            entries.append(
+                entry_from_stl(
+                    stl,
+                    revision=revision,
+                    created_at=str(item.get("created_at") or ""),
+                    volume_mm3=checks.get("volume_mm3"),
+                )
+            )
+        except (OSError, ValueError):
+            continue
+    if not entries:
+        return {}
+    name = str(manifest.get("name") or "")
     try:
-        info = write_viewer(
-            stl,
+        info = write_collection_viewer(
+            assets.asset_dir(asset_id),
+            entries,
             title=name or asset_id,
-            subtitle=f"{asset_id} · {revision}",
-            revision=revision,
+            subtitle=f"{len(entries)} revision(s) · interactive 3D",
             name=name,
-            volume_mm3=volume_mm3,
+            selected=selected,
         )
     except (OSError, ValueError) as exc:
         return {"viewer_error": f"{type(exc).__name__}: {exc}"}
     return {
         "viewer_path": rt.workspace.rel(info["path"]),
         "viewer_file": str(info["path"]),
+        "viewer_revision": selected or entries[-1]["revision"],
+        "viewer_revisions": len(entries),
+        "viewer_triangles": info["triangles"],
+        "viewer_bytes": info["bytes"],
     }
 
 
@@ -685,16 +707,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
 
             viewer: dict[str, Any] = {}
             if result.ok:
-                stl_path = assets.revision_dir(asset_id, target) / "model.stl"
-                if stl_path.is_file():
-                    viewer = _auto_viewer(
-                        rt,
-                        stl_path,
-                        asset_id=asset_id,
-                        revision=target,
-                        name=manifest.get("name") or "",
-                        volume_mm3=(result.checks or {}).get("volume_mm3"),
-                    )
+                viewer = _asset_viewer(rt, assets, assets.load(asset_id), selected=target)
 
             hint = (
                 "Review the checks, open viewer_file for an interactive look, then slice. "
@@ -824,7 +837,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Rendered model, revision {target} (views: {', '.join(wanted)}):",
                 )
             )
-            viewer_file = directory / "viewer.html"
+            viewer_file = assets.asset_dir(asset_id) / "viewer.html"
             payload = {
                 "ok": True,
                 "writes_performed": False,
@@ -854,11 +867,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="model_view",
         description=(
-            "Write a self-contained interactive 3D viewer (HTML, orbit / pan / zoom, "
-            "no server or CDN) for a built revision's model.stl. Open the file in a "
-            "browser, or hand it to `present` so the user gets an open action. The "
-            "geometry is embedded in the file. WRITES one file in the revision "
-            "directory: confirm must be exactly 'VIEW <asset_id>'."
+            "Write one self-contained interactive 3D viewer (HTML, orbit / pan / "
+            "zoom, no server or CDN) per asset. The file embeds every built "
+            "revision and has a revision dropdown, so only one file is ever handed "
+            "to the user. Open it in a browser or pass it to `present`. WRITES one "
+            "file in the asset directory: confirm must be exactly 'VIEW <asset_id>'."
         ),
     )
     def model_view(asset_id: str, confirm: str, revision: str = "") -> dict[str, Any]:
@@ -890,36 +903,28 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     ),
                 )
 
-            name = str(manifest.get("name") or token)
-            try:
-                result = write_viewer(
-                    stl,
-                    title=name,
-                    subtitle=f"revision {target} · interactive 3D",
-                    revision=target,
-                    name=name,
-                )
-            except ValueError as exc:
+            viewer = _asset_viewer(rt, assets, manifest, selected=target)
+            if "viewer_error" in viewer:
                 raise InvalidArgument(
-                    f"Cannot build the 3D viewer: {exc}",
+                    f"Cannot build the 3D viewer: {viewer['viewer_error']}",
                     hint="Reduce the triangle count or inspect the STL.",
-                ) from None
-
-            path = Path(result["path"])
+                )
             return {
                 "ok": True,
                 "writes_performed": True,
                 "asset_id": token,
                 "revision": target,
-                "viewer_path": rt.workspace.rel(path),
-                "viewer_file": str(path),
-                "file": VIEWER_FILE,
-                "triangles": result["triangles"],
-                "bytes": result["bytes"],
+                "viewer_path": viewer["viewer_path"],
+                "viewer_file": viewer["viewer_file"],
+                "viewer_revision": viewer["viewer_revision"],
+                "viewer_revisions": viewer["viewer_revisions"],
+                "file": "viewer.html",
+                "triangles": viewer["viewer_triangles"],
+                "bytes": viewer["viewer_bytes"],
                 "hint": (
-                    "Open the HTML in a browser to orbit, pan, zoom, spin and save "
-                    "a PNG. Call `present` with viewer_file to give the user an "
-                    "open action in DSH."
+                    "Open the HTML in a browser to switch revisions, orbit, pan, "
+                    "zoom, spin and save a PNG. Call `present` with viewer_file to "
+                    "give the user an open action in DSH."
                 ),
             }
         except XPrintError as exc:
@@ -1029,15 +1034,12 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 rt.record_write(f"assets/{manifest['asset_id']}/{revision}/model.stl")
 
             viewer: dict[str, Any] = {}
-            stl_path = assets.revision_dir(manifest["asset_id"], revision) / "model.stl"
-            if result.ok and stl_path.is_file():
-                viewer = _auto_viewer(
+            if result.ok:
+                viewer = _asset_viewer(
                     rt,
-                    stl_path,
-                    asset_id=manifest["asset_id"],
-                    revision=revision,
-                    name=manifest.get("name") or "",
-                    volume_mm3=(result.checks or {}).get("volume_mm3"),
+                    assets,
+                    assets.load(manifest["asset_id"]),
+                    selected=revision,
                 )
 
             hint = (
@@ -1237,13 +1239,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         kind="cloud",
                     )
                     rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.stl")
-                    viewer = _auto_viewer(
+                    viewer = _asset_viewer(
                         rt,
-                        assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.stl",
-                        asset_id=manifest["asset_id"],
-                        revision=record["revision"],
-                        name=name,
-                        volume_mm3=checks.get("volume_mm3"),
+                        assets,
+                        assets.load(manifest["asset_id"]),
+                        selected=record["revision"],
                     )
                     return {
                         "asset_id": manifest["asset_id"],
@@ -1405,13 +1405,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     kind="local",
                 )
                 rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.stl")
-                viewer = _auto_viewer(
+                viewer = _asset_viewer(
                     rt,
-                    assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.stl",
-                    asset_id=manifest["asset_id"],
-                    revision=record["revision"],
-                    name=name,
-                    volume_mm3=checks.get("volume_mm3"),
+                    assets,
+                    assets.load(manifest["asset_id"]),
+                    selected=record["revision"],
                 )
                 return {
                     "asset_id": manifest["asset_id"],
@@ -2185,12 +2183,15 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 params_path = assets.revision_dir(asset_id, target) / "params.json"
                 if params_path.is_file():
                     params = json.loads(params_path.read_text(encoding="utf-8"))
+            viewer_path = assets.asset_dir(asset_id) / "viewer.html"
+            viewer_rel = rt.workspace.rel(viewer_path) if viewer_path.is_file() else None
             return {
                 "ok": True,
                 "writes_performed": False,
                 "asset_id": asset_id,
                 "name": manifest.get("name"),
                 "revision": target,
+                "viewer": viewer_rel,
                 "revisions": [
                     {
                         "revision": item.get("revision"),
@@ -2210,13 +2211,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "prompt": item.get("prompt"),
                         "model": item.get("model"),
                         "modeler": item.get("modeler"),
-                        "viewer": (
-                            f"assets/{asset_id}/{item.get('revision')}/viewer.html"
-                            if (
-                                assets.revision_dir(asset_id, item.get("revision")) / "viewer.html"
-                            ).is_file()
-                            else None
-                        ),
+                        "viewer": viewer_rel,
                     }
                     for item in manifest.get("revisions", [])
                 ],

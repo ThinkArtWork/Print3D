@@ -50,6 +50,81 @@ def _mesh_volume(triangles: np.ndarray) -> float:
     return float(abs(np.sum(a * np.cross(b, c))) / 6.0)
 
 
+def _mesh_entry(
+    triangles: np.ndarray,
+    *,
+    revision: str,
+    label: str = "",
+    created_at: str = "",
+    volume_mm3: float | None = None,
+) -> dict:
+    """Describe one mesh as an embeddable revision entry."""
+
+    triangles = np.asarray(triangles, dtype=np.float64)
+    if triangles.ndim != 3 or triangles.shape[1:] != (3, 3) or not len(triangles):
+        raise ValueError("the mesh contains no triangles")
+
+    vertices = triangles.reshape(-1, 3)
+    low = vertices.min(axis=0)
+    high = vertices.max(axis=0)
+    extent = np.maximum(high - low, 1e-9)
+    center = (low + high) / 2.0
+    normals = np.repeat(_face_normals(triangles), 3, axis=0)
+    volume = float(volume_mm3) if volume_mm3 is not None else _mesh_volume(triangles)
+    return {
+        "revision": revision,
+        "label": label or revision,
+        "created_at": created_at,
+        "triangles": int(len(triangles)),
+        "bbox_mm": [round(float(value), 3) for value in extent],
+        "center_mm": [round(float(value), 4) for value in center],
+        "volume_cm3": round(volume / 1000.0, 3),
+        "pos": _encode(triangles.reshape(-1)),
+        "nrm": _encode(normals.reshape(-1)),
+    }
+
+
+def collection_html(
+    entries: list[dict],
+    *,
+    title: str,
+    subtitle: str,
+    name: str = "",
+    selected: str = "",
+) -> str:
+    """Render one or more revisions into a single document with a version picker."""
+
+    if not entries:
+        raise ValueError("the mesh contains no triangles")
+    total = sum(int(entry["triangles"]) for entry in entries)
+    if total > MAX_VIEW_TRIANGLES:
+        raise ValueError(
+            f"the model has {total:,} triangles across {len(entries)} revision(s); "
+            f"the interactive viewer supports at most {MAX_VIEW_TRIANGLES:,}"
+        )
+
+    chosen = next((entry for entry in entries if entry["revision"] == selected), entries[-1])
+    meta = {
+        "name": name or title,
+        "revision": chosen["revision"],
+        "triangles": chosen["triangles"],
+        "bbox_mm": chosen["bbox_mm"],
+        "center_mm": chosen["center_mm"],
+        "volume_cm3": chosen["volume_cm3"],
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ"),
+        "revisions": entries,
+    }
+    replacements = {
+        "__TITLE__": escape(title),
+        "__SUBTITLE__": escape(subtitle),
+        "__META_JSON__": json.dumps(meta, ensure_ascii=False).replace("<", "\\u003c"),
+    }
+    html = _TEMPLATE
+    for key, value in replacements.items():
+        html = html.replace(key, value)
+    return html
+
+
 def viewer_html(
     triangles: np.ndarray,
     *,
@@ -61,43 +136,68 @@ def viewer_html(
 ) -> str:
     """Render one revision to a standalone HTML document."""
 
-    triangles = np.asarray(triangles, dtype=np.float64)
-    if triangles.ndim != 3 or triangles.shape[1:] != (3, 3) or not len(triangles):
-        raise ValueError("the mesh contains no triangles")
-    if len(triangles) > MAX_VIEW_TRIANGLES:
+    entry = _mesh_entry(
+        triangles,
+        revision=revision,
+        volume_mm3=volume_mm3,
+    )
+    total = int(entry["triangles"])
+    if total > MAX_VIEW_TRIANGLES:
         raise ValueError(
-            f"the mesh has {len(triangles):,} triangles; the interactive viewer "
+            f"the mesh has {total:,} triangles; the interactive viewer "
             f"supports at most {MAX_VIEW_TRIANGLES:,}"
         )
+    return collection_html([entry], title=title, subtitle=subtitle, name=name)
 
-    vertices = triangles.reshape(-1, 3)
-    low = vertices.min(axis=0)
-    high = vertices.max(axis=0)
-    extent = np.maximum(high - low, 1e-9)
-    center = (low + high) / 2.0
-    normals = np.repeat(_face_normals(triangles), 3, axis=0)
-    volume = float(volume_mm3) if volume_mm3 is not None else _mesh_volume(triangles)
-    meta = {
-        "name": name or title,
-        "revision": revision,
-        "triangles": int(len(triangles)),
-        "bbox_mm": [round(float(value), 3) for value in extent],
-        "center_mm": [round(float(value), 4) for value in center],
-        "volume_cm3": round(volume / 1000.0, 3),
-        "generated_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ"),
-    }
 
-    replacements = {
-        "__TITLE__": escape(title),
-        "__SUBTITLE__": escape(subtitle),
-        "__META_JSON__": json.dumps(meta, ensure_ascii=False).replace("<", "\\u003c"),
-        "__POSITIONS__": _encode(triangles.reshape(-1)),
-        "__NORMALS__": _encode(normals.reshape(-1)),
+def entry_from_stl(
+    stl_path: str | Path,
+    *,
+    revision: str,
+    label: str = "",
+    created_at: str = "",
+    volume_mm3: float | None = None,
+) -> dict:
+    """Load one revision's STL and turn it into a viewer entry."""
+
+    triangles = load_stl(stl_path)
+    return _mesh_entry(
+        triangles,
+        revision=revision,
+        label=label,
+        created_at=created_at,
+        volume_mm3=volume_mm3,
+    )
+
+
+def write_collection_viewer(
+    directory: str | Path,
+    entries: list[dict],
+    *,
+    title: str,
+    subtitle: str = "",
+    name: str = "",
+    selected: str = "",
+) -> dict:
+    """Write a combined, version-switchable viewer into ``directory``."""
+
+    html = collection_html(
+        entries,
+        title=title,
+        subtitle=subtitle or f"{len(entries)} revision(s) · interactive 3D",
+        name=name,
+        selected=selected,
+    )
+    target = Path(directory) / VIEWER_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(html, encoding="utf-8")
+    target.chmod(0o644)
+    return {
+        "path": target,
+        "bytes": len(html.encode("utf-8")),
+        "triangles": sum(int(entry["triangles"]) for entry in entries),
+        "revisions": [entry["revision"] for entry in entries],
     }
-    html = _TEMPLATE
-    for key, value in replacements.items():
-        html = html.replace(key, value)
-    return html
 
 
 def write_viewer(

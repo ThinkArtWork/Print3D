@@ -153,7 +153,9 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
     assert "build_part" in shown["script"]
     assert shown["revisions"][0]["build_ok"] is True
     assert shown["revisions"][0]["built"] is True
-    assert shown["revisions"][0]["viewer"].endswith("v001/viewer.html")
+    assert shown["viewer"].endswith(f"{asset_id}/viewer.html")
+    assert shown["revisions"][0]["viewer"] == shown["viewer"]
+    assert (workspace.root / shown["viewer"]).is_file()
     assert shown["revisions"][0]["volume_mm3"] == 8000.0
 
 
