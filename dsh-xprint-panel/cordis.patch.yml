@@ -1,0 +1,7 @@
+- insert:
+    - id: xprint-panel
+      name: '@local/xprint-panel'
+      config:
+        command: /Users/macadmin/XPrint/.venv/bin/xprint
+        workspace: /Users/macadmin/XPrint/.xprint
+        cwd: /Users/macadmin/XPrint

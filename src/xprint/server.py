@@ -2178,6 +2178,20 @@ def serve(
     if token:
         app.add_middleware(BearerAuth, token=token)
 
+    # The optional DSH Web panel runs on a different loopback port, so its
+    # browser calls are cross-origin.  Allow loopback origins only, matching
+    # the bind policy above; added last so CORS handles preflight before auth.
+    from starlette.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$",
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["mcp-session-id"],
+        max_age=600,
+    )
+
     import uvicorn
 
     uvicorn.run(app, host=bind_host, port=bind_port, log_level="warning")

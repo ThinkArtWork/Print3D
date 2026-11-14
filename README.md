@@ -57,6 +57,14 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 之后在会话里直接调用 `mcp__xprint__system_status`、`mcp__xprint__capabilities` 等工具。
 
+**可选：左侧栏面板**。`dsh-xprint-panel/` 是 DSH 客户端插件：安装后左侧栏出现一个立方体图标，点开是本地模型库、任务计数和最新渲染（含概念图对照）。它通过本机 `127.0.0.1:8765` 的 MCP HTTP 端点读取同一份工作区，**只读**，所有写操作仍然走会话里的工具和 `confirm` 字符串。
+
+```
+plugin_manager install_bundle target: /absolute/path/to/XPrint/dsh-xprint-panel
+```
+
+装完重启 DSH（或刷新页面）生效；Host 半会随插件拉起 `xprint serve --http --host 127.0.0.1 --port 8765`。细节见 [dsh-xprint-panel/README.md](dsh-xprint-panel/README.md)。
+
 ## 两条建模路径
 
 XPrint **不自己接任何 LLM**。它把建模闭环的原语暴露成 MCP 工具，由**你正在用的宿主模型**驱动；每条路径都以真实几何检查收尾，而不是凭文字想象。
@@ -355,7 +363,8 @@ XPrint/
     capabilities.py    # 能力探测（只读）
     script_policy.py   # build123d 脚本静态审查
     errors.py          # 统一错误码
-  dsh-xprint-mcp/      # DSH 配置文件型 bundle
+  dsh-xprint-mcp/      # DSH 配置文件型 bundle（stdio 工具）
+  dsh-xprint-panel/    # DSH 客户端插件（左侧栏只读面板）
   tests/
   docs/
 ```
