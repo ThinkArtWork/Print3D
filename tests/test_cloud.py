@@ -329,6 +329,45 @@ def test_download_model_rejects_empty_body() -> None:
             download_model("https://cdn.test/empty.stl")
 
 
+def test_download_model_enforces_the_size_cap_while_streaming() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://cdn.test/big.stl").mock(
+            return_value=httpx.Response(200, content=b"x" * 64)
+        )
+        with pytest.raises(AdapterUnavailable, match="larger than"):
+            download_model("https://cdn.test/big.stl", max_bytes=16)
+
+
+def test_download_model_rejects_non_http_urls() -> None:
+    for url in ("file:///etc/passwd", "data:text/plain,hello", "https:///nohost"):
+        with pytest.raises(InvalidArgument):
+            download_model(url)
+
+
+def test_download_model_follows_a_redirect() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://cdn.test/start").mock(
+            return_value=httpx.Response(302, headers={"location": "https://cdn.test/final.stl"})
+        )
+        mock.get("https://cdn.test/final.stl").mock(
+            return_value=httpx.Response(
+                200, content=binary_stl_bytes(), headers={"content-type": "model/stl"}
+            )
+        )
+        data, suffix = download_model("https://cdn.test/start")
+    assert data == binary_stl_bytes()
+    assert suffix == ".stl"
+
+
+def test_download_model_refuses_a_redirect_to_a_non_http_url() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://cdn.test/start").mock(
+            return_value=httpx.Response(302, headers={"location": "file:///etc/passwd"})
+        )
+        with pytest.raises(InvalidArgument):
+            download_model("https://cdn.test/start")
+
+
 def load_stl_bytes(data: bytes):  # noqa: ANN001, ANN201 - test helper
     import tempfile
     from pathlib import Path

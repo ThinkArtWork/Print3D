@@ -47,6 +47,19 @@ def test_policy_bans_imports_and_calls() -> None:
     assert "subprocess" in messages
 
 
+def test_policy_rejects_module_escape_imports() -> None:
+    for module in ("runpy", "os", "subprocess"):
+        issues = check_blender_script(f"import bpy\nimport {module}\n")
+        messages = " ".join(i.message for i in issues if i.severity == "error")
+        assert module in messages
+
+
+def test_policy_rejects_sys_module_escape() -> None:
+    issues = check_blender_script("import bpy\nimport sys\nsys.modules['os'].system('ls')\n")
+    messages = " ".join(i.message for i in issues if i.severity == "error")
+    assert "sys.modules" in messages
+
+
 def test_policy_warns_when_no_mesh_is_created() -> None:
     issues = check_blender_script("import bpy\nprint(bpy.app.version)\n")
     assert any(issue.severity == "warning" for issue in issues)

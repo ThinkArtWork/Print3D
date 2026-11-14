@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -223,19 +224,34 @@ class ImageGenerator:
                 ) from None
         url = item.get("url")
         if isinstance(url, str) and url.strip():
+            parsed = urlparse(url.strip())
+            if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+                raise AdapterUnavailable(
+                    "The image provider returned a non-HTTP image URL",
+                    details={"scheme": parsed.scheme},
+                )
             # Never forward the provider key to a third-party CDN.
+            chunks: list[bytes] = []
             try:
-                download = client.get(url)
+                with client.stream("GET", url.strip()) as download:
+                    if download.status_code >= 400:
+                        raise AdapterUnavailable(
+                            f"Could not download the generated image (HTTP {download.status_code})"
+                        )
+                    total = 0
+                    for chunk in download.iter_bytes():
+                        total += len(chunk)
+                        if total > MAX_IMAGE_BYTES:
+                            raise AdapterUnavailable(
+                                f"The generated image is larger than {MAX_IMAGE_BYTES} bytes"
+                            )
+                        chunks.append(chunk)
             except httpx.HTTPError as exc:
                 raise AdapterUnavailable(
                     "Could not download the generated image",
                     details={"error": str(exc)},
                 ) from None
-            if download.status_code >= 400:
-                raise AdapterUnavailable(
-                    f"Could not download the generated image (HTTP {download.status_code})"
-                )
-            return download.content
+            return b"".join(chunks)
         raise AdapterUnavailable(
             "The image provider returned neither b64_json nor url",
             details={"keys": sorted(item)},

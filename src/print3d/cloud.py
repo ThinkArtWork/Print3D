@@ -24,13 +24,15 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from .errors import AdapterUnavailable, AdapterUnknown, InvalidArgument
 
 MAX_MODEL_BYTES = 150 * 1024 * 1024
+MAX_REDIRECTS = 3
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 SUCCESS = "success"
 FAILED = "failed"
 CANCELLED = "cancelled"
@@ -537,31 +539,68 @@ def build_provider(
     )
 
 
+def _checked_url(url: str) -> str:
+    """Reject anything that is not a plain http(s) URL with a host."""
+
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise InvalidArgument(
+            "The provider returned a model URL that is not http(s)",
+            details={"scheme": parsed.scheme},
+        )
+    return url
+
+
 def download_model(
     url: str,
     *,
     transport: httpx.BaseTransport | None = None,
     max_bytes: int = MAX_MODEL_BYTES,
 ) -> tuple[bytes, str]:
-    """Download a generated model; returns ``(bytes, suffix)``."""
+    """Download a generated model; returns ``(bytes, suffix)``.
+
+    Redirects are followed by hand (max :data:`MAX_REDIRECTS`), each hop is
+    re-validated as http(s) with a host, and the body is read in chunks so a
+    hostile or broken provider cannot make 3DPrint buffer gigabytes.
+    """
 
     if not url:
         raise InvalidArgument("The provider did not return a model URL")
-    with httpx.Client(timeout=120.0, transport=transport, follow_redirects=True) as client:
-        response = client.get(url)
-        if response.status_code >= 400:
-            raise AdapterUnavailable(
-                f"Could not download the generated model (HTTP {response.status_code})"
-            )
-        data = response.content
+    current = _checked_url(url)
+    content_type = ""
+    data = b""
+    with httpx.Client(timeout=120.0, transport=transport, follow_redirects=False) as client:
+        for _ in range(MAX_REDIRECTS + 1):
+            with client.stream("GET", current) as response:
+                if response.status_code in _REDIRECT_CODES:
+                    location = response.headers.get("location", "")
+                    if not location:
+                        raise AdapterUnavailable(
+                            "The provider redirect did not include a Location header"
+                        )
+                    current = _checked_url(urljoin(str(response.url), location))
+                    continue
+                if response.status_code >= 400:
+                    raise AdapterUnavailable(
+                        f"Could not download the generated model (HTTP {response.status_code})"
+                    )
+                content_type = response.headers.get("content-type", "")
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise AdapterUnavailable(
+                            f"The generated model is larger than {max_bytes} bytes"
+                        )
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                break
+        else:
+            raise AdapterUnavailable("The model URL redirected too many times")
     if not data:
         raise AdapterUnavailable("The provider returned an empty model file")
-    if len(data) > max_bytes:
-        raise AdapterUnavailable(
-            f"The generated model is larger than {max_bytes // (1024 * 1024)} MB"
-        )
-    suffix = _model_suffix(url, response.headers.get("content-type", ""))
-    return data, suffix
+    return data, _model_suffix(current, content_type)
 
 
 def _model_suffix(url: str, content_type: str) -> str:

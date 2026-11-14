@@ -55,8 +55,31 @@ def test_missing_contract_pieces() -> None:
     assert "build123d" in messages
 
 
-def test_open_is_a_warning() -> None:
+def test_open_is_rejected() -> None:
     code = GOOD + "\nopen('/tmp/x', 'w')\n"
     summary = summarise(check_script(code))
-    assert summary["ok"] is True
-    assert any("open()" in w["message"] for w in summary["warnings"])
+    assert summary["ok"] is False
+    assert any("open" in e["message"] for e in summary["errors"])
+
+
+def test_import_allowlist_blocks_other_modules() -> None:
+    for module in ("sys", "numpy", "json", "runpy"):
+        code = GOOD.replace("from build123d import *", f"import {module}\nfrom build123d import *")
+        messages = " ".join(e["message"] for e in summarise(check_script(code))["errors"])
+        assert module in messages
+
+
+def test_dunder_escape_is_rejected() -> None:
+    code = GOOD + "\nx = ().__class__.__base__.__subclasses__()\n"
+    messages = " ".join(e["message"] for e in summarise(check_script(code))["errors"])
+    assert "__class__" in messages
+
+
+def test_builtins_and_dynamic_lookup_are_rejected() -> None:
+    for snippet in ("x = __builtins__", "getattr(x, 'y')", "g = globals()"):
+        code = GOOD + "\n" + snippet + "\n"
+        assert summarise(check_script(code))["ok"] is False
+
+
+def test_name_dunder_allows_the_main_guard() -> None:
+    assert summarise(check_script(GOOD))["ok"] is True

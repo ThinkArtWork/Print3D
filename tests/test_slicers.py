@@ -43,11 +43,19 @@ if "--help" in args:
 outdir = args[args.index("--outputdir") + 1]
 stl = args[-1]
 os.makedirs(outdir, exist_ok=True)
-if os.environ.get("FAKE_SLICER_FAIL"):
+mode_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake-orca.mode")
+mode = ""
+if os.path.exists(mode_file):
+    with open(mode_file, encoding="utf-8") as handle:
+        mode = handle.read().strip()
+if os.environ.get("FAKE_SLICER_FAIL") or mode == "fail":
     print("fake slicer failure", file=sys.stderr)
     sys.exit(7)
-if os.environ.get("FAKE_SLICER_SLEEP"):
-    time.sleep(float(os.environ["FAKE_SLICER_SLEEP"]))
+sleep_for = os.environ.get("FAKE_SLICER_SLEEP", "")
+if mode.startswith("sleep:"):
+    sleep_for = mode.split(":", 1)[1]
+if sleep_for:
+    time.sleep(float(sleep_for))
 
 name = os.path.splitext(os.path.basename(stl))[0]
 header = [
@@ -262,22 +270,22 @@ def test_slice_stl_produces_gcode_and_real_checks(tmp_path: Path) -> None:
     assert result.checks["model_volume_mm3"] > 0
 
 
-def test_slice_stl_reports_a_failed_slicer(tmp_path: Path, monkeypatch) -> None:
+def test_slice_stl_reports_a_failed_slicer(tmp_path: Path) -> None:
     target = _target(tmp_path)
     stl = tmp_path / "model.stl"
     write_stl(stl)
-    monkeypatch.setenv("FAKE_SLICER_FAIL", "1")
+    (tmp_path / "fake-orca.mode").write_text("fail", encoding="utf-8")
     result = slice_stl(stl, target, tmp_path / "work", timeout_s=20)
     assert result.ok is False
     assert result.exit_code == 7
     assert "code 7" in (result.error or "")
 
 
-def test_slice_stl_enforces_the_timeout(tmp_path: Path, monkeypatch) -> None:
+def test_slice_stl_enforces_the_timeout(tmp_path: Path) -> None:
     target = _target(tmp_path)
     stl = tmp_path / "model.stl"
     write_stl(stl)
-    monkeypatch.setenv("FAKE_SLICER_SLEEP", "5")
+    (tmp_path / "fake-orca.mode").write_text("sleep:5", encoding="utf-8")
     result = slice_stl(stl, target, tmp_path / "work", timeout_s=0.5)
     assert result.ok is False
     assert result.timed_out is True

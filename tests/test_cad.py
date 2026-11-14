@@ -46,7 +46,9 @@ def test_clean_env_drops_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert "MOONSHOT_API_KEY" not in env
     assert "MY_PASSWORD" not in env
     assert "PYTHONPATH" not in env
-    assert env["KEEP_ME"] == "yes"
+    # The worker gets an allowlist, so an arbitrary variable never reaches it —
+    # including one with a harmless name, which a denylist would have passed on.
+    assert "KEEP_ME" not in env
     assert env["PRINT3D_SANDBOX"] == "1"
 
 

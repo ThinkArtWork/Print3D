@@ -165,11 +165,11 @@ def test_slice_run_slices_and_records(workspace, tmp_path) -> None:
             runtime.runner.shutdown(wait=False)
 
 
-def test_slice_run_records_a_failure(workspace, tmp_path, monkeypatch) -> None:
+def test_slice_run_records_a_failure(workspace, tmp_path) -> None:
     _configure(workspace, tmp_path)
     runtime = Runtime.create(workspace=workspace)
     asset_id, _ = _built_asset(runtime, tmp_path)
-    monkeypatch.setenv("FAKE_SLICER_FAIL", "1")
+    (tmp_path / "fake-orca.mode").write_text("fail", encoding="utf-8")
     try:
         started = _call(
             runtime,

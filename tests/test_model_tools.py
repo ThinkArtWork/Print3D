@@ -122,7 +122,7 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
             artifacts={"stl": str(out / "model.stl"), "step": str(out / "model.step")},
         )
 
-    monkeypatch.setattr("print3d.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.tools.models.run_script", fake_run)
     runtime = _runtime(workspace)
     written = call(
         runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
@@ -181,7 +181,7 @@ def test_model_build_reports_a_failed_run(workspace, monkeypatch) -> None:
             stderr="Traceback ...\nValueError: radius must be positive",
         )
 
-    monkeypatch.setattr("print3d.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.tools.models.run_script", fake_run)
     runtime = _runtime(workspace)
     written = call(
         runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
@@ -233,7 +233,7 @@ def test_model_build_stores_and_exposes_a_step_input(
             artifacts={"stl": str(out / "model.stl"), "step": str(out / "model.step")},
         )
 
-    monkeypatch.setattr("print3d.server.run_script", fake_run)
+    monkeypatch.setattr("print3d.tools.models.run_script", fake_run)
     source = tmp_path / "bracket.step"
     source.write_text(STEP_STUB, encoding="utf-8")
     runtime = _runtime(workspace)
@@ -340,8 +340,8 @@ def test_model_drawing_records_a_sheet(workspace, monkeypatch, tmp_path: Path) -
             files={"drawing.svg": str(svg), "drawing.dxf": str(dxf)},
         )
 
-    monkeypatch.setattr("print3d.server.run_script", fake_run)
-    monkeypatch.setattr("print3d.server.run_drawing", fake_drawing)
+    monkeypatch.setattr("print3d.tools.models.run_script", fake_run)
+    monkeypatch.setattr("print3d.tools.models.run_drawing", fake_drawing)
     runtime = _runtime(workspace)
     written = call(
         runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
@@ -372,11 +372,11 @@ def test_model_drawing_records_a_sheet(workspace, monkeypatch, tmp_path: Path) -
             "asset_id": asset_id,
             "artifact": "svg",
             "confirm": f"EXPORT {asset_id}",
-            "out_path": str(tmp_path / "sheet.svg"),
+            "out_path": str(workspace.root / "sheet.svg"),
         },
     )
     assert exported["ok"] is True
-    assert (tmp_path / "sheet.svg").read_text(encoding="utf-8") == "<svg></svg>"
+    assert (workspace.root / "sheet.svg").read_text(encoding="utf-8") == "<svg></svg>"
 
 
 def test_model_drawing_requires_a_built_step(workspace) -> None:
@@ -487,7 +487,7 @@ def test_model_preview_returns_an_image(workspace, monkeypatch) -> None:
     (revision.parent / "model.stl").write_bytes(b"binary-stl-placeholder")
 
     png = _png_bytes()
-    monkeypatch.setattr("print3d.server.render_views", lambda *a, **k: png)
+    monkeypatch.setattr("print3d.tools.models.render_views", lambda *a, **k: png)
 
     async def scenario():
         async with create_connected_server_and_client_session(build_server(runtime)) as client:
@@ -564,7 +564,7 @@ def test_asset_export_copies_the_stl(workspace, tmp_path) -> None:
         written["asset_id"], written["revision"], build={"ok": True}, artifacts={"model.stl": stl}
     )
 
-    destination = tmp_path / "exports" / "cube.stl"
+    destination = workspace.root / "exports" / "cube.stl"
     payload = call(
         runtime,
         "asset_export",
@@ -580,6 +580,31 @@ def test_asset_export_copies_the_stl(workspace, tmp_path) -> None:
     assert destination.read_bytes() == b"solid fake\nendsolid fake\n"
     assert payload["sha256"] == payload["sha256"].lower()
     assert payload["artifact"] == "stl"
+
+
+def test_asset_export_refuses_paths_outside_the_workspace(workspace, tmp_path) -> None:
+    runtime = _runtime(workspace)
+    written = call(
+        runtime, "model_write", {"script": GOOD, "name": "cube", "confirm": "WRITE cube"}
+    )
+    stl = tmp_path / "built.stl"
+    stl.write_bytes(b"solid fake\nendsolid fake\n")
+    AssetStore(workspace).record_build(
+        written["asset_id"], written["revision"], build={"ok": True}, artifacts={"model.stl": stl}
+    )
+
+    payload = call(
+        runtime,
+        "asset_export",
+        {
+            "asset_id": written["asset_id"],
+            "confirm": f"EXPORT {written['asset_id']}",
+            "out_path": str(tmp_path / "escaped.stl"),
+        },
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "path_outside_workspace"
+    assert not (tmp_path / "escaped.stl").exists()
 
 
 def test_asset_export_requires_a_build(workspace) -> None:
@@ -731,9 +756,9 @@ def test_generate_cloud_creates_an_asset(workspace, monkeypatch) -> None:
         def close(self):
             pass
 
-    monkeypatch.setattr("print3d.server.build_provider", lambda *a, **k: FakeCloud())
+    monkeypatch.setattr("print3d.tools.generating.build_provider", lambda *a, **k: FakeCloud())
     monkeypatch.setattr(
-        "print3d.server.download_model",
+        "print3d.tools.generating.download_model",
         lambda url, **k: (binary_stl_bytes(), ".stl"),
     )
 
@@ -875,12 +900,12 @@ def test_generate_cloud_can_fit_generated_mesh_to_size(workspace, monkeypatch) -
             artifacts={"model.stl": str(model)},
         )
 
-    monkeypatch.setattr("print3d.server.build_provider", lambda *a, **k: FakeCloud())
+    monkeypatch.setattr("print3d.tools.generating.build_provider", lambda *a, **k: FakeCloud())
     monkeypatch.setattr(
-        "print3d.server.download_model",
+        "print3d.tools.generating.download_model",
         lambda url, **k: (binary_stl_bytes(), ".stl"),
     )
-    monkeypatch.setattr("print3d.server.run_blender", fake_blender)
+    monkeypatch.setattr("print3d.tools.generating.run_blender", fake_blender)
 
     workspace.config_path.write_text(
         json.dumps(

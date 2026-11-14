@@ -2,7 +2,7 @@
 
 **3DPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、STEP 导入与 SVG/DXF 工程图纸、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **28 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
+> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、STEP 导入与 SVG/DXF 工程图纸、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **29 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
 
 ## 文档
 
@@ -12,6 +12,27 @@
 ## 快速开始
 
 需要 Python ≥ 3.11（本机验证于 3.14）与 [uv](https://docs.astral.sh/uv/)。
+
+### 安装：GitHub Release（首发渠道）
+
+3DPrint 尚未发布到 PyPI。首发走 GitHub Release：既能直接跑，也能装 wheel。
+
+```bash
+# 直接从 git 仓库跑，不安装
+uvx --from git+https://github.com/<you>/3DPrint.git 3dprint capabilities
+
+# 或者装进一个隔离环境
+pipx install "git+https://github.com/<you>/3DPrint.git"
+```
+
+每个 Release 会附 `3dprint-<version>-py3-none-any.whl`，也可以用
+`pipx install https://github.com/<you>/3DPrint/releases/download/v0.1.0/3dprint-0.1.0-py3-none-any.whl`。
+打包、打标签与发版步骤见 [docs/RELEASE.md](docs/RELEASE.md)。
+
+> 平台：macOS / Linux。切片与 CAD worker 用 `os.killpg` + POSIX `resource` 限额，
+> Windows 上不可用。
+
+### 安装：从源码开发
 
 ```bash
 git clone <this-repo> 3DPrint && cd 3DPrint
@@ -505,11 +526,12 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 
 1. **只读工具免费**：`capabilities`、`system_status`、`job_status`、`asset_list`、`model_show`、`printability_check`、`orientation_plan` 不需要确认，且明确返回 `writes_performed: false`；`model_preview` 只写预览缓存。
 2. **写操作必须精确确认**：确认串逐字符比较，错了返回 `confirmation_mismatch` 且不写任何文件。
-3. **路径沙箱**：除 `reference_import`（只读用户给的图片路径）和 `asset_export`（只写用户指定的目标）外，所有路径经 `safe_path()` 解析符号链接后校验，逃出工作区一律 `path_outside_workspace`。
-4. **脚本策略 + 执行沙箱**：build123d 脚本先过 AST 审查（禁 `os/pathlib/subprocess/socket/shutil/ctypes/requests/urllib/http/multiprocessing`、禁 `eval/exec/open`…），再在 `cad_worker.py` 子进程里执行：RLIMIT_CPU/FSIZE/NOFILE、独立进程组、超时 SIGKILL、环境变量剔除密钥。bpy 脚本同样先过静态审查（同样禁网络/进程/文件模块，必须使用 `bpy`），再由 `blender -b --factory-startup` 子进程执行，使用独立的 Blender 配置目录、超时杀进程组。`generate_local` 运行的是用户自己配置的命令，环境变量剔除密钥并带超时；这是「用户信任本机命令」的显式边界。静态审查是纵深防御，不是沙箱；真正的隔离边界是子进程 + 资源限额。
-5. **不开放任意 G-code**：切片产物先检查再发送，`printer_*` 只接受切片器产物。
-6. **密钥**：只从环境变量或 `~/.3dprint/secrets.json`（0600）读取；日志与工具输出统一脱敏。
-7. **打印前检查**：`send` 要求切片成功、G-code 存在、打印机 idle 且型号匹配；上传后立即启动是默认行为，没有自动重试，取消走 `printer_cancel`。
+3. **路径沙箱**：除 `reference_import`（只读用户给的图片路径）外，所有用户给的路径经 `safe_path()` 解析符号链接后校验，逃出工作区一律 `path_outside_workspace`；`asset_export` 的 `out_path` 同样限制在工作区内，不能借导出覆盖 `~/.ssh/authorized_keys` 之类的文件。
+4. **脚本策略 + 执行沙箱**：build123d 脚本先过 AST 审查，**导入是白名单**（`build123d`、`math`），`_` 开头的属性访问一律拒绝（封 `().__class__.__base__.__subclasses__()` 逃逸），`eval/exec/open/getattr/__builtins__` 等动态入口直接报错；再在 `cad_worker.py` 子进程里执行：RLIMIT_CPU/FSIZE/NOFILE、独立进程组、超时 SIGKILL。子进程拿到的是**环境变量白名单**（PATH/HOME/TMPDIR/语言/动态库/fontconfig），provider 密钥无论叫什么名字都进不去。bpy 脚本同样先过静态审查（`bpy/bmesh/mathutils/math/sys/...` 白名单，`sys.modules` 等逃逸路径拒绝），再由 `blender -b --factory-startup` 子进程执行。`generate_local` 运行的是用户自己配置的命令，环境变量同样白名单过滤并带超时；这是「用户信任本机命令」的显式边界。静态审查是纵深防御，不是沙箱；真正的隔离边界是子进程 + 资源限额。
+5. **出站下载有上限**：云端模型下载只接受 http(s)、最多 3 次重定向、边下边计数（默认 150 MiB 上限），概念图 URL 下载 12 MiB 上限；HTTP 模式用 `hmac.compare_digest` 比较 Bearer token。
+6. **不开放任意 G-code**：切片产物先检查再发送，`printer_*` 只接受切片器产物。
+7. **密钥**：只从环境变量或 `~/.3dprint/secrets.json`（0600）读取；日志与工具输出统一脱敏。
+8. **打印前检查**：`send` 要求切片成功、G-code 存在、打印机 idle 且型号匹配；上传后立即启动是默认行为，没有自动重试，取消走 `printer_cancel`。
 
 ## 开发
 
@@ -527,20 +549,40 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 3DPrint/
   pyproject.toml
   src/print3d/
-    server.py          # MCP 入口（stdio / streamable HTTP）+ 28 个工具
+    server.py          # MCP 入口（stdio / streamable HTTP + Bearer 鉴权），只负责装配
+    runtime.py         # Runtime（workspace/config/registry/assets）+ 工具错误信封
+    instructions.py    # MCP instructions 文本
+    tools/             # 29 个工具，按领域分模块注册
+      system.py        #   capabilities / system_status
+      images.py        #   reference_import / image_generate
+      models.py        #   model_write / model_build / model_drawing / model_preview / model_view
+      generating.py    #   blender_run / mesh_fit / generate_cloud / generate_local
+      analysis.py      #   printability_check / orientation_plan
+      slicing.py       #   slice_capabilities / slice_plan / slice_run / slice_inspect
+      printers.py      #   printer_list / printer_status / printer_save / printer_remove / send / printer_cancel
+      catalog.py       #   asset_list / asset_export / model_show / job_status
+      common.py        #   共享的切片参数/错误/查看器助手
     cli.py             # 3dprint init|capabilities|status|config|tools|serve|job|cad|view|image|preview
     config.py          # config.json / secrets / 环境变量优先级
     workspace.py       # ~/.3dprint 布局 + safe_path 沙箱
     jobs.py            # 任务状态机与 job.json
-    assets.py          # 资产 manifest + vNNN 版本 + reference
+    assets.py          # 资产 manifest + vNNN 版本 + reference + STEP input/output
     images.py          # 概念图生成（OpenAI 兼容）+ reference 存储
     preview.py         # numpy/Pillow 四视图渲染
-    printers.py        # Moonraker / OctoPrint 适配器（状态/上传/启动/取消）
-    cad.py             # 父进程侧 CAD 执行器（超时/环境清理）
+    cloud.py           # Tripo / 混元 3D 适配器 + 下载/转 STL
+    local_mesh.py      # generate_local 命令适配器
+    mesh_fit.py        # 网格校准到毫米尺寸（Blender）
+    blender.py         # Blender 后台执行器
+    blender_policy.py  # bpy 脚本静态审查
+    slicers.py         # OrcaSlicer CLI 适配器
+    printers.py        # Moonraker / OctoPrint / Bambu LAN / PrusaLink / HTTP 适配器
+    drawing.py         # 工程图父进程执行器
+    drawing_worker.py  # 第三角四视图 SVG/DXF 子进程
+    cad.py             # 父进程侧 CAD 执行器（超时/环境白名单）
     cad_worker.py      # 子进程入口（rlimit + build123d + STL 检查）
     registry.py        # 适配器注册表
     capabilities.py    # 能力探测（只读）
-    script_policy.py   # build123d 脚本静态审查
+    script_policy.py   # build123d 脚本静态审查（导入白名单）
     errors.py          # 统一错误码
   dsh-3dprint-mcp/      # DSH 配置文件型 bundle（stdio 工具）
   tests/
@@ -572,4 +614,5 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 - **M3（完成，2026-11-14）**：打印机 CRUD、Moonraker/OctoPrint/Bambu LAN/PrusaLink/声明式 HTTP 适配器、`send` 上传+启动、`printer_cancel`，24 个工具；Snapmaker U1 真机完成切片→上传→打印（25 层 / 325 s / 662 mm）。Bambu 与 PrusaLink 只有单元测试。
 - **M3.6（完成，2026-11-14）**：新增 `printability_check` 与 `orientation_plan` 两个只读几何工具（薄壁射线估计、悬垂/支撑估计、热床适配、24 向摆放排序），27 个工具。
 - **M3.7（完成，2026-11-14）**：`model_build` 支持 `input=<step>`（STEP 复制进版本并暴露为 `INPUT_STEP`），新增 `model_drawing` 出第三角四视图 SVG/DXF 图纸（`asset_export` 可导出），28 个工具。原因：用户要求「改已有 STEP」与「出工程图」补上 FreeCAD 的两项实际用途。
+- **M4（完成，2026-11-14）**：项目由 XPrint 更名为 **3DPrint**（发行名 `3DPrint`，导入名 `print3d`，CLI `3dprint`，环境变量 `PRINT3D_*`，工作区 `~/.3dprint`），`server.py` 拆成 `runtime.py` + `tools/`；安全加固（导入白名单、属性 `_` 禁令、子进程环境白名单、导出限定工作区、下载流式上限、恒时比较 Bearer token），29 个工具；工具 schema 与拆分前逐字节一致。
 - **M3.5（已移除，2026-11-14）**：曾实现并安装 DSH 左侧栏只读面板；因与对话流里的 `model_preview` 重复、维护成本高，当日卸载并删除。交互式 3D 改由 `model_view` 的单文件 HTML 提供，25 个工具。

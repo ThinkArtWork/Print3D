@@ -6,8 +6,9 @@
 
 ```bash
 # 1) 先让 `3dprint` 在 PATH 上（任选一种）
-pipx install /path/to/3DPrint          # 或
-cd /path/to/3DPrint && .venv/bin/pip install -e .
+pipx install "git+https://github.com/<you>/3DPrint.git"   # 发布后；或
+uvx --from git+https://github.com/<you>/3DPrint.git 3dprint capabilities
+cd /path/to/3DPrint && .venv/bin/pip install -e .        # 从源码
 
 # 2) 安装 bundle：DSH 的 Plugins → Add plugin 选择本目录
 #    或由 agent 调用 plugin_manager 的 action=install_bundle, target=<绝对路径>
@@ -20,7 +21,8 @@ cd /path/to/3DPrint && .venv/bin/pip install -e .
 
 - `mcp__3dprint__system_status` —— 返回 `writes_performed: false`
 - `mcp__3dprint__capabilities` —— 报告可用 provider / modeler / slicer
-- `mcp__3dprint__model_generate` —— 让 Kimi 生成 build123d 脚本（需要 `MOONSHOT_API_KEY`）
+- `mcp__3dprint__model_write` / `mcp__3dprint__model_build` —— 写入并沙箱构建 build123d 脚本
+- `mcp__3dprint__model_preview` —— 四视图 PNG
 
 ## 说明
 

@@ -50,7 +50,7 @@ def _fake_blender(monkeypatch: pytest.MonkeyPatch, workspace) -> None:
             artifacts={"model.stl": str(model)},
         )
 
-    monkeypatch.setattr("print3d.server.run_blender", fake_run)
+    monkeypatch.setattr("print3d.tools.generating.run_blender", fake_run)
 
 
 def test_fit_script_contains_exact_envelope_and_budget(tmp_path: Path) -> None:

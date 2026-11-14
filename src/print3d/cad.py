@@ -25,8 +25,35 @@ WORKER = Path(__file__).with_name("cad_worker.py")
 DEFAULT_TIMEOUT_S = 120.0
 MAX_OUTPUT_CHARS = 4000
 
-# Environment variables that must never reach generated code.
-_SECRET_MARKERS = ("API_KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+# Generated code gets an allowlisted environment, not a filtered copy of ours:
+# a denylist of secret-looking names is one forgotten vendor prefix away from a
+# leak, and a script only ever needs a handful of variables to run.
+_ENV_ALLOWLIST = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    # dynamic loaders: some installs (conda, Homebrew) need these to find OCP
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    # fontconfig, used by build123d Text()
+    "FONTCONFIG_PATH",
+    "FONTCONFIG_FILE",
+)
 
 
 @dataclass(slots=True)
@@ -89,17 +116,17 @@ def tail(text: str, limit: int) -> str:
 
 
 def clean_env(extra_deny: tuple[str, ...] = ()) -> dict[str, str]:
-    """Copy the environment minus anything that looks like a credential."""
+    """Return the minimal environment generated code is allowed to see.
+
+    ``extra_deny`` stays accepted so callers can drop an allowlisted variable
+    for one invocation; nothing outside :data:`_ENV_ALLOWLIST` is passed, and
+    ``PYTHONPATH``/``PYTHONSTARTUP``/``PYTHONHOME`` never are.
+    """
 
     denied = set(extra_deny)
-    env: dict[str, str] = {}
-    for key, value in os.environ.items():
-        upper = key.upper()
-        if key in denied or any(marker in upper for marker in _SECRET_MARKERS):
-            continue
-        if key in {"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME"}:
-            continue
-        env[key] = value
+    env: dict[str, str] = {
+        key: os.environ[key] for key in _ENV_ALLOWLIST if key in os.environ and key not in denied
+    }
     env.update(
         {
             "PYTHONDONTWRITEBYTECODE": "1",

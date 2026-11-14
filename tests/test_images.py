@@ -168,6 +168,29 @@ def test_generator_from_config_maps_settings() -> None:
     assert generator.provider_id == "custom"
 
 
+@respx.mock
+def test_url_image_download_is_capped(generator: ImageGenerator, monkeypatch) -> None:
+    monkeypatch.setattr("print3d.images.MAX_IMAGE_BYTES", 4)
+    respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"data": [{"url": "https://cdn.test/big.png"}]})
+    )
+    respx.get("https://cdn.test/big.png").mock(
+        return_value=httpx.Response(200, content=png_bytes())
+    )
+
+    with pytest.raises(AdapterUnavailable, match="larger than"):
+        generator.generate("a bracket")
+
+
+@respx.mock
+def test_url_image_download_must_be_http(generator: ImageGenerator) -> None:
+    respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"data": [{"url": "file:///etc/passwd"}]})
+    )
+    with pytest.raises(AdapterUnavailable, match="non-HTTP"):
+        generator.generate("a bracket")
+
+
 def test_sniff_image_mime() -> None:
     assert sniff_image_mime(b"\x89PNG\r\n\x1a\n" + b"x" * 8) == "image/png"
     assert sniff_image_mime(b"\xff\xd8\xff\xe0" + b"x" * 8) == "image/jpeg"

@@ -12,8 +12,9 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from print3d.errors import InvalidArgument
 from print3d.printers import PrinterState
-from print3d.server import Runtime, _apply_slot, build_server
+from print3d.server import Runtime, build_server
 from print3d.slicers import SliceOptions, SliceStore, new_slice_id
+from print3d.tools.common import _apply_slot
 from print3d.workspace import Workspace
 
 
@@ -202,7 +203,7 @@ def test_printer_status_uses_adapter(tmp_path, monkeypatch) -> None:
         tmp_path, [{"id": "u1", "adapter": "moonraker", "base_url": "http://printer.local:7125"}]
     )
     monkeypatch.setattr(
-        "print3d.server.build_printer", lambda *a, **k: FakePrinter(state="operational")
+        "print3d.tools.printers.build_printer", lambda *a, **k: FakePrinter(state="operational")
     )
     payload = _call(runtime, "printer_status", {"printer_id": "u1"})
     assert payload["ok"] is True
@@ -223,7 +224,7 @@ def test_send_uploads_and_starts(tmp_path, monkeypatch) -> None:
         ],
     )
     fake = FakePrinter()
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     slice_id = _fake_slice(runtime.workspace)
 
     sent = _call(
@@ -253,7 +254,7 @@ def test_send_refuses_busy_printer(tmp_path, monkeypatch) -> None:
         ],
     )
     fake = FakePrinter(state="printing")
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     slice_id = _fake_slice(runtime.workspace)
     payload = _call(
         runtime,
@@ -278,7 +279,7 @@ def test_send_refuses_target_mismatch(tmp_path, monkeypatch) -> None:
             }
         ],
     )
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: FakePrinter())
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: FakePrinter())
     slice_id = _fake_slice(runtime.workspace, printer_model="Bambu Lab A1")
     payload = _call(
         runtime,
@@ -315,7 +316,7 @@ def test_printer_cancel(tmp_path, monkeypatch) -> None:
         tmp_path, [{"id": "u1", "adapter": "moonraker", "base_url": "http://printer.local:7125"}]
     )
     fake = FakePrinter(state="printing")
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     payload = _call(runtime, "printer_cancel", {"printer_id": "u1", "confirm": "CANCEL PRINT u1"})
     assert payload["ok"] is True
     assert fake.cancelled == 1
@@ -377,7 +378,7 @@ def test_send_refuses_more_toolheads_than_configured(tmp_path, monkeypatch) -> N
         ],
     )
     fake = FakePrinter()
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     slice_id = _fake_slice(runtime.workspace, toolheads=[0, 4])
     payload = _call(
         runtime,
@@ -481,7 +482,7 @@ def test_send_refuses_a_slot_with_the_wrong_material(tmp_path, monkeypatch) -> N
         ],
     )
     fake = FakePrinter()
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     slice_id = _fake_slice(runtime.workspace, toolheads=[1], material="PLA")
 
     payload = _call(
@@ -514,7 +515,7 @@ def test_send_accepts_an_ams_slot_with_the_right_material(tmp_path, monkeypatch)
         ],
     )
     fake = FakePrinter()
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     slice_id = _fake_slice(runtime.workspace, toolheads=[2], material="PLA")
 
     payload = _call(
@@ -575,7 +576,7 @@ def test_send_enables_printer_flow_calibration(tmp_path, monkeypatch) -> None:
         ],
     )
     fake = FakePrinter()
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     slice_id = _fake_slice(runtime.workspace)
     sent = _call(
         runtime,
@@ -685,7 +686,7 @@ def test_printer_status_reports_capabilities(tmp_path, monkeypatch) -> None:
     )
     fake = FakePrinter()
     fake.flow_calibration = lambda: {"source": "/x.json", "factors": {"T0": 0.04}, "env": {}}
-    monkeypatch.setattr("print3d.server.build_printer", lambda *a, **k: fake)
+    monkeypatch.setattr("print3d.tools.printers.build_printer", lambda *a, **k: fake)
     payload = _call(runtime, "printer_status", {"printer_id": "voron"})
     assert payload["ok"] is True
     caps = payload["capabilities"]

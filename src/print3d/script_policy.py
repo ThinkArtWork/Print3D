@@ -2,16 +2,19 @@
 
 An LLM-written ``build123d`` script is still untrusted code.  3DPrint does not
 execute it in-process, but it does store it and may hand it to the CAD backend,
-so the cheap static gate runs first:
+so a cheap static gate runs first:
 
 * parse errors and oversized scripts are hard failures;
-* imports of process/network/file-shuffling modules are hard failures;
-* calls to ``eval``/``exec``/``os.system`` and friends are hard failures;
-* a missing ``build_part`` or missing ``build123d`` import is a hard failure;
-* anything merely suspicious (e.g. ``open``) is a warning for the operator.
+* imports are an **allowlist** (``build123d`` and ``math``) — a denylist would
+  let a script reach the same capability through a module we forgot to list;
+* attribute access to anything underscore-prefixed is a hard failure, which
+  closes the ``().__class__.__base__.__subclasses__()`` route around the import
+  allowlist;
+* ``__builtins__`` and the usual dynamic-evaluation helpers are hard failures;
+* a missing ``build_part`` or missing ``build123d`` import is a hard failure.
 
-This is defence in depth, not a sandbox: the CAD backend must still run scripts
-as an external process with its own limits.
+This is defence in depth, not a sandbox: the CAD backend still runs scripts as
+an external process with its own resource limits and a scrubbed environment.
 """
 
 from __future__ import annotations
@@ -21,40 +24,50 @@ from dataclasses import dataclass
 
 MAX_SCRIPT_BYTES = 64 * 1024
 
-BANNED_MODULES = frozenset(
+#: Model scripts may only import these top-level modules.
+ALLOWED_MODULES = frozenset({"build123d", "math"})
+
+#: Names that are never allowed, whether called or merely referenced.
+BANNED_NAMES = frozenset(
     {
-        "ctypes",
-        "ftplib",
-        "http",
-        "multiprocessing",
-        "os",
-        "pathlib",
-        "requests",
-        "shutil",
-        "signal",
-        "socket",
-        "subprocess",
-        "telnetlib",
-        "urllib",
+        "breakpoint",
+        "compile",
+        "delattr",
+        "dir",
+        "eval",
+        "exec",
+        "getattr",
+        "globals",
+        "input",
+        "locals",
+        "memoryview",
+        "open",
+        "setattr",
+        "vars",
+        "__import__",
     }
 )
 
-BANNED_CALLS = frozenset({"eval", "exec", "compile", "__import__", "breakpoint", "input"})
-
-BANNED_ATTR_CALLS = frozenset(
+#: Dotted attribute chains that must not be reached (module-escape routes).
+BANNED_DOTTED = frozenset(
     {
-        "os.system",
-        "os.popen",
+        "os.remove",
+        "os.rmdir",
         "os.spawnl",
         "os.spawnv",
-        "os.remove",
-        "os.unlink",
-        "os.rmdir",
+        "os.system",
+        "pathlib.Path",
         "shutil.rmtree",
-        "pathlib.Path.unlink",
-        "pathlib.Path.write_text",
+        "sys.builtins",
+        "sys.meta_path",
+        "sys.modules",
+        "sys.path",
+        "sys.path_hooks",
     }
 )
+
+#: Dunder globals a script may read; everything else underscore-looking is out.
+ALLOWED_DUNDERS = frozenset({"__doc__", "__name__"})
 
 
 @dataclass(frozen=True)
@@ -70,7 +83,7 @@ class Issue:
         return data
 
 
-def _dotted(node: ast.AST) -> str | None:
+def dotted(node: ast.AST) -> str | None:
     """Return ``a.b.c`` for an Attribute/Name chain, else None."""
     parts: list[str] = []
     current: ast.AST | None = node
@@ -83,10 +96,71 @@ def _dotted(node: ast.AST) -> str | None:
     return None
 
 
+def access_issues(
+    tree: ast.Module,
+    *,
+    allowed_modules: frozenset[str] = ALLOWED_MODULES,
+    allowed_dunders: frozenset[str] = ALLOWED_DUNDERS,
+    import_message: str = "imports in a model script are limited to {module}",
+) -> list[Issue]:
+    """Return import/attribute/name violations for an already-parsed module."""
+
+    issues: list[Issue] = []
+    allowed = ", ".join(sorted(allowed_modules))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root not in allowed_modules:
+                    issues.append(
+                        Issue(
+                            "error",
+                            import_message.format(module=f"{alias.name!r} (allowed: {allowed})"),
+                            line=node.lineno,
+                        )
+                    )
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root and root not in allowed_modules:
+                issues.append(
+                    Issue(
+                        "error",
+                        import_message.format(
+                            module=f"{(node.module or '')!r} (allowed: {allowed})"
+                        ),
+                        line=node.lineno,
+                    )
+                )
+        elif isinstance(node, ast.Name):
+            if node.id in BANNED_NAMES:
+                issues.append(
+                    Issue(
+                        "error", f"{node.id} is not available to a model script", line=node.lineno
+                    )
+                )
+            elif node.id.startswith("__") and node.id not in allowed_dunders:
+                issues.append(
+                    Issue("error", f"dunder name {node.id} is not allowed", line=node.lineno)
+                )
+        elif isinstance(node, ast.Attribute):
+            if node.attr.startswith("_"):
+                issues.append(
+                    Issue(
+                        "error",
+                        f"attribute access to {node.attr!r} is not allowed",
+                        line=node.lineno,
+                    )
+                )
+                continue
+            name = dotted(node)
+            if name in BANNED_DOTTED:
+                issues.append(Issue("error", f"call to {name}() is not allowed", line=node.lineno))
+    return issues
+
+
 def check_script(code: str) -> list[Issue]:
     """Return every policy violation found in ``code`` (empty means usable)."""
 
-    issues: list[Issue] = []
     if not code or not code.strip():
         return [Issue("error", "script is empty")]
     if len(code.encode("utf-8")) > MAX_SCRIPT_BYTES:
@@ -99,52 +173,16 @@ def check_script(code: str) -> list[Issue]:
             Issue("error", f"script does not parse: {exc.msg}", line=exc.lineno),
         ]
 
+    issues = access_issues(tree)
     has_build123d = False
     has_build_part = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".")[0]
-                if root == "build123d":
-                    has_build123d = True
-                if root in BANNED_MODULES:
-                    issues.append(
-                        Issue(
-                            "error",
-                            f"import of {root!r} is not allowed in a model script",
-                            line=node.lineno,
-                        )
-                    )
+            has_build123d |= any(a.name.split(".")[0] == "build123d" for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            root = (node.module or "").split(".")[0]
-            if root == "build123d":
-                has_build123d = True
-            if root in BANNED_MODULES:
-                issues.append(
-                    Issue(
-                        "error",
-                        f"import of {root!r} is not allowed in a model script",
-                        line=node.lineno,
-                    )
-                )
+            has_build123d |= (node.module or "").split(".")[0] == "build123d"
         elif isinstance(node, ast.FunctionDef) and node.name == "build_part":
             has_build_part = True
-        elif isinstance(node, ast.Call):
-            name = _dotted(node.func)
-            if isinstance(node.func, ast.Name) and node.func.id in BANNED_CALLS:
-                issues.append(
-                    Issue("error", f"call to {node.func.id}() is not allowed", line=node.lineno)
-                )
-            elif name in BANNED_ATTR_CALLS:
-                issues.append(Issue("error", f"call to {name}() is not allowed", line=node.lineno))
-            elif isinstance(node.func, ast.Name) and node.func.id == "open":
-                issues.append(
-                    Issue(
-                        "warning",
-                        "script calls open(); export through build123d helpers instead",
-                        line=node.lineno,
-                    )
-                )
 
     if not has_build_part:
         issues.append(Issue("error", "script must define build_part()"))
@@ -165,4 +203,15 @@ def summarise(issues: list[Issue]) -> dict[str, object]:
     }
 
 
-__all__ = ["Issue", "MAX_SCRIPT_BYTES", "check_script", "errors", "summarise"]
+__all__ = [
+    "ALLOWED_DUNDERS",
+    "ALLOWED_MODULES",
+    "BANNED_DOTTED",
+    "BANNED_NAMES",
+    "Issue",
+    "MAX_SCRIPT_BYTES",
+    "access_issues",
+    "check_script",
+    "errors",
+    "summarise",
+]
