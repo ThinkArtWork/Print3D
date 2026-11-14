@@ -18,7 +18,7 @@ from .errors import InvalidArgument, NotFound, PathOutsideWorkspace
 DEFAULT_WORKSPACE = "~/.xprint"
 
 #: Directories created inside a workspace on first use.
-SUBDIRS = ("assets", "references", "jobs", "profiles", "cache", "logs")
+SUBDIRS = ("assets", "references", "jobs", "slices", "profiles", "cache", "logs")
 
 
 def atomic_write_text(path: Path, text: str, *, mode: int = 0o600) -> None:
@@ -79,6 +79,10 @@ class Workspace:
     @property
     def references_dir(self) -> Path:
         return self.root / "references"
+
+    @property
+    def slices_dir(self) -> Path:
+        return self.root / "slices"
 
     @property
     def logs_dir(self) -> Path:

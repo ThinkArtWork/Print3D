@@ -47,6 +47,10 @@ def test_handshake_and_tools_list() -> None:
         "model_show",
         "model_write",
         "reference_import",
+        "slice_capabilities",
+        "slice_inspect",
+        "slice_plan",
+        "slice_run",
         "system_status",
     ]
     assert all(t.inputSchema["type"] == "object" for t in listing.tools)

@@ -87,11 +87,16 @@ class TargetSettings(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     printer_model: str
-    slicer: str
+    slicer: str = "orca"
     slicer_path: str | None = None
+    datadir: str | None = None
+    machine: str | None = None
+    process: str | None = None
+    filament: str | list[str] = Field(default_factory=list)
     profiles_root: str | None = None
     drop_profile_keys: list[str] = Field(default_factory=list)
     overrides: dict[str, Any] = Field(default_factory=dict)
+    timeout_s: float = Field(900.0, gt=1, le=3600)
 
 
 class PrinterSettings(BaseModel):
