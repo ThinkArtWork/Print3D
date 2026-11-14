@@ -38,10 +38,13 @@ plugin_manager install_bundle target: /Users/macadmin/XPrint/dsh-xprint-panel
 ## 注意
 
 - 面板是只读的：写资产、切片、发送打印仍然走会话里的工具和 `confirm` 字符串。
-- 8765 端口只绑定 `127.0.0.1`；Host 半会删掉继承来的 `XPRINT_TOKEN`，因为浏览器
-  半没有凭证。要跨机器访问请自行加认证，不要直接把端口暴露到局域网。
+- 8765 端口只绑定 `127.0.0.1`；CORS 只放行 loopback origin（`127.0.0.1` /
+  `localhost` / `[::1]`）。Host 半会删掉继承来的 `XPRINT_TOKEN`，因为浏览器半
+  没有凭证。要跨机器访问请自行加认证，不要直接把端口暴露到局域网。
 - 如果 `secrets.json` 里配置了 `server.token`（或运行环境带 `XPRINT_TOKEN`），
   HTTP 端点会要求 Bearer 认证，而浏览器半没有凭证；把该 token 去掉或改用
   stdio/`mcp-manager` 路径。
 - 如果 8765 已被占用，Host 半的 uvicorn 会退出，面板连已有的服务；这适合手动
   调试，但两个进程的工作区必须一致。
+
+设计说明见 `docs/DESIGN.md` 的 §3.3，安装与排障概览见仓库根 `README.md`。
