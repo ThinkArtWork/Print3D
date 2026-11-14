@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from mcp.shared.memory import create_connected_server_and_client_session
+from tests.stl_helpers import binary_stl_bytes
 
 from xprint.assets import AssetStore
 from xprint.server import Runtime, build_server
@@ -111,7 +112,7 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
     def fake_run(script, *, workdir=None, timeout_s=0, python=None):
         out = Path(workdir)
         out.mkdir(parents=True, exist_ok=True)
-        (out / "model.stl").write_text("solid cube")
+        (out / "model.stl").write_bytes(binary_stl_bytes())
         (out / "model.step").write_text("ISO-10303")
         return RunResult(
             ok=True,
@@ -132,6 +133,10 @@ def test_model_build_runs_and_records(workspace, monkeypatch, tmp_path: Path) ->
     assert payload["writes_performed"] is True
     assert payload["checks"]["watertight"] is True
     assert payload["artifacts"] == ["model.step", "model.stl"]
+    assert payload["viewer_file"].endswith("viewer.html")
+    assert Path(payload["viewer_file"]).is_file()
+    assert payload["viewer_path"].startswith("assets/")
+    assert payload["viewer_path"].endswith("/viewer.html")
 
     revision = workspace.root / Path(written["script_path"]).parent
     assert (revision / "model.stl").is_file()
@@ -475,6 +480,7 @@ def test_generate_local_runs_a_provider_and_creates_an_asset(workspace, tmp_path
     assert status is not None
     assert status["job"]["state"] == "succeeded", status
     assert status["job"]["result"]["checks"]["triangles"] == 4
+    assert Path(status["job"]["result"]["viewer_file"]).is_file()
     assets = call(runtime, "asset_list", {})
     assert any(item["name"] == "tetra" for item in assets["assets"])
 
@@ -562,6 +568,7 @@ def test_generate_cloud_creates_an_asset(workspace, monkeypatch) -> None:
     assert result["task_id"] == "task-42"
     assets = call(runtime, "asset_list", {})
     assert any(item["name"] == "cloud-tetra" for item in assets["assets"])
+    assert Path(status["job"]["result"]["viewer_file"]).is_file()
 
 
 def test_generate_cloud_rejects_confirm_and_unknown_provider(workspace) -> None:

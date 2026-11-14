@@ -113,6 +113,14 @@ Two modelling paths, both stored as versioned assets:
 (model.stl, model.step) live in the workspace; previews are returned inline as
 PNG content.
 
+Every successful build also writes a self-contained interactive viewer
+(`viewer.html`) next to `model.stl` and returns `viewer_file` — `model_build`,
+`blender_run`, and the `generate_local` / `generate_cloud` jobs all do this.
+As soon as a model exists, call `present` with that `viewer_file` so the user
+gets a one-click 3D preview in the conversation; do not wait to be asked.
+`model_preview` also echoes `viewer_file` when it is already there, and
+`model_view` can regenerate it for older revisions.
+
 Two extra engines reuse the same asset + preview loop:
 
 - `blender_run` executes a bpy scene script with Blender in background mode,
@@ -265,6 +273,34 @@ def _printer_entry(rt: Runtime, printer_id: str):
         f"Unknown printer: {printer_id}",
         hint=f"Configured printers: {known}. Add one with printer_save.",
     )
+
+
+def _auto_viewer(
+    rt: Runtime,
+    stl: Path,
+    *,
+    asset_id: str,
+    revision: str,
+    name: str = "",
+    volume_mm3: float | None = None,
+) -> dict[str, Any]:
+    """Best-effort interactive viewer next to a freshly built model.stl."""
+
+    try:
+        info = write_viewer(
+            stl,
+            title=name or asset_id,
+            subtitle=f"{asset_id} · {revision}",
+            revision=revision,
+            name=name,
+            volume_mm3=volume_mm3,
+        )
+    except (OSError, ValueError) as exc:
+        return {"viewer_error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "viewer_path": rt.workspace.rel(info["path"]),
+        "viewer_file": str(info["path"]),
+    }
 
 
 def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> FastMCP:
@@ -585,9 +621,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "interpreter (CPU/time/file limits, no API keys in the environment) and "
             "attach the result to that revision. Returns real geometry checks "
             "(watertight, boundary/non-manifold edges, bbox, volume) and stores "
-            "model.stl/model.step. This is the feedback step of the closed loop: read "
-            "the checks, fix the script, call model_write again. WRITES files: confirm "
-            "must be exactly 'BUILD <asset_id>'."
+            "model.stl/model.step plus a self-contained interactive viewer.html. "
+            "This is the feedback step of the closed loop: read the checks, fix the "
+            "script, call model_write again, and call `present` with viewer_file so "
+            "the user can open the 3D preview. WRITES files: confirm must be exactly "
+            "'BUILD <asset_id>'."
         ),
     )
     def model_build(asset_id: str, confirm: str, revision: str = "") -> dict[str, Any]:
@@ -645,9 +683,22 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             )
             rt.record_write(f"assets/{asset_id}/{target}/model.stl")
 
+            viewer: dict[str, Any] = {}
+            if result.ok:
+                stl_path = assets.revision_dir(asset_id, target) / "model.stl"
+                if stl_path.is_file():
+                    viewer = _auto_viewer(
+                        rt,
+                        stl_path,
+                        asset_id=asset_id,
+                        revision=target,
+                        name=manifest.get("name") or "",
+                        volume_mm3=(result.checks or {}).get("volume_mm3"),
+                    )
+
             hint = (
-                "Printable so far: review the checks, then slice. If a check failed, "
-                "fix the script and call model_write followed by model_build."
+                "Review the checks, open viewer_file for an interactive look, then slice. "
+                "If a check failed, fix the script and call model_write followed by model_build."
             )
             if not result.ok:
                 hint = (
@@ -667,6 +718,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "error": result.error,
                 "stdout_tail": result.stdout[-2000:],
                 "stderr_tail": result.stderr[-2000:],
+                **viewer,
                 "hint": hint,
             }
         except XPrintError as exc:
@@ -772,12 +824,15 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Rendered model, revision {target} (views: {', '.join(wanted)}):",
                 )
             )
+            viewer_file = directory / "viewer.html"
             payload = {
                 "ok": True,
                 "writes_performed": False,
                 "asset_id": asset_id,
                 "revision": target,
                 "image_path": rt.workspace.rel(cache),
+                "viewer_path": rt.workspace.rel(viewer_file) if viewer_file.is_file() else None,
+                "viewer_file": str(viewer_file) if viewer_file.is_file() else None,
                 "cached": cached,
                 "views": list(wanted),
                 "width": int(width),
@@ -875,7 +930,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         description=(
             "Turn a bpy Python script into a printable mesh by running Blender in "
             "background mode (blender -b --factory-startup --python scene.py), then "
-            "exporting every mesh object to model.stl + model.glb and inspecting it. "
+            "exporting every mesh object to model.stl + model.glb, writing an "
+            "interactive viewer.html and inspecting it. "
             "This is the Blender path for text-to-3D: the client model writes the "
             "scene (primitive_*, bmesh, solidify, remesh, ...); for image-to-3D it "
             "looks at the attached image itself and the script can read the same "
@@ -972,9 +1028,22 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 )
                 rt.record_write(f"assets/{manifest['asset_id']}/{revision}/model.stl")
 
+            viewer: dict[str, Any] = {}
+            stl_path = assets.revision_dir(manifest["asset_id"], revision) / "model.stl"
+            if result.ok and stl_path.is_file():
+                viewer = _auto_viewer(
+                    rt,
+                    stl_path,
+                    asset_id=manifest["asset_id"],
+                    revision=revision,
+                    name=manifest.get("name") or "",
+                    volume_mm3=(result.checks or {}).get("volume_mm3"),
+                )
+
             hint = (
-                "Review checks and call model_preview; fix scene.py and call "
-                "blender_run with asset_id to add the next revision."
+                "Review checks, open viewer_file for an interactive look, or call "
+                "model_preview. Fix scene.py and call blender_run with asset_id to "
+                "add the next revision."
                 if result.ok
                 else "Read stderr_tail, fix scene.py, then call blender_run again with asset_id."
             )
@@ -992,6 +1061,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "error": result.error,
                 "stdout_tail": result.stdout[-1500:],
                 "stderr_tail": result.stderr[-1500:],
+                **viewer,
                 "hint": hint,
             }
         except XPrintError as exc:
@@ -1167,6 +1237,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         kind="cloud",
                     )
                     rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.stl")
+                    viewer = _auto_viewer(
+                        rt,
+                        assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.stl",
+                        asset_id=manifest["asset_id"],
+                        revision=record["revision"],
+                        name=name,
+                        volume_mm3=checks.get("volume_mm3"),
+                    )
                     return {
                         "asset_id": manifest["asset_id"],
                         "name": name,
@@ -1176,6 +1254,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "task_id": task_id,
                         "checks": checks,
                         "artifacts": sorted(record.get("artifacts", {})),
+                        **viewer,
                     }
                 finally:
                     client.close()
@@ -1195,7 +1274,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "adapter": adapter,
                 "mode": mode,
                 "timeout_s": budget,
-                "hint": "Poll job_status(job_id); on success call model_preview(asset_id).",
+                "hint": "Poll job_status(job_id); on success open result.viewer_file or call model_preview(asset_id).",
             }
         except XPrintError as exc:
             return tool_error(exc)
@@ -1326,6 +1405,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     kind="local",
                 )
                 rt.record_write(f"assets/{manifest['asset_id']}/{record['revision']}/model.stl")
+                viewer = _auto_viewer(
+                    rt,
+                    assets.revision_dir(manifest["asset_id"], record["revision"]) / "model.stl",
+                    asset_id=manifest["asset_id"],
+                    revision=record["revision"],
+                    name=name,
+                    volume_mm3=checks.get("volume_mm3"),
+                )
                 return {
                     "asset_id": manifest["asset_id"],
                     "name": name,
@@ -1335,6 +1422,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "duration_s": round(result.duration_s, 2),
                     "checks": checks,
                     "artifacts": sorted(record.get("artifacts", {})),
+                    **viewer,
                 }
 
             runner = rt.runner or JobRunner(rt.store)
@@ -1351,7 +1439,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "provider": provider,
                 "mode": mode,
                 "timeout_s": budget,
-                "hint": "Poll job_status(job_id); on success call model_preview(asset_id).",
+                "hint": "Poll job_status(job_id); on success open result.viewer_file or call model_preview(asset_id).",
             }
         except XPrintError as exc:
             return tool_error(exc)
