@@ -52,7 +52,12 @@ from .local_mesh import DEFAULT_TIMEOUT_S as LOCAL_GENERATION_TIMEOUT
 from .local_mesh import run_local
 from .mesh import stats_for_stl
 from .preview import DEFAULT_VIEWS, render_views
-from .printers import PRINTER_ADAPTERS, build_printer, validate_printer_id
+from .printers import (
+    PRINTER_ADAPTERS,
+    build_printer,
+    validate_http_config,
+    validate_printer_id,
+)
 from .registry import Registry, builtin_registry
 from .runner import JobRunner
 from .script_policy import check_script, summarise
@@ -1596,7 +1601,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         try:
             entries = []
             for entry in rt.loaded.config.printers:
-                key_env = entry.access_code_env or entry.api_key_env
+                key_env = entry.password_env or entry.access_code_env or entry.api_key_env
                 key = rt.secrets.provider_key(entry.id, api_key_env=key_env)
                 entries.append(
                     {
@@ -1606,6 +1611,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "model": entry.model,
                         "base_url": entry.base_url,
                         "serial": entry.serial,
+                        "storage": entry.storage,
                         "toolheads": entry.toolheads,
                         "enabled": entry.enabled,
                         "has_key": bool(key),
@@ -1671,6 +1677,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         serial: str = "",
         api_key_env: str = "",
         access_code_env: str = "",
+        username: str = "",
+        password_env: str = "",
+        storage: str = "local",
+        http: dict[str, Any] | None = None,
         enabled: bool = True,
     ) -> dict[str, Any]:
         try:
@@ -1702,6 +1712,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "bambu_lan printers need a serial",
                     hint="Find the serial under Settings > Device on the printer (or in Bambu Studio).",
                 )
+            if chosen == "http":
+                validate_http_config(http or {})
             entry = PrinterSettings(
                 id=printer_id,
                 adapter=chosen,
@@ -1712,6 +1724,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 enabled=bool(enabled),
                 api_key_env=api_key_env.strip() or None,
                 access_code_env=access_code_env.strip() or None,
+                username=username.strip() or None,
+                password_env=password_env.strip() or None,
+                storage=storage.strip() or "local",
+                http=http or {},
             )
             path = save_printer(rt.loaded, entry)
             return {

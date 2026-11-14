@@ -222,7 +222,7 @@ slice_inspect(slice_id)                  → 层数、预计时间、耗材、pr
 - 实测（OrcaSlicer 2.5.0 + Bambu A1，0.16 mm）：20×20×10 带孔方块 → 62 层、16m01s、2.31 g、332 KB G-code。
 - 已知限制：Snapmaker Orca 01.10.01.50 无头加载 U1 预设即段错误（连 `--export-settings` 也崩），U1 目标暂不可用；厂商修 CLI 后只需加一条 target 配置。
 
-### 路径七：发送到打印机（Moonraker / OctoPrint / Bambu LAN）
+### 路径七：发送到打印机（Moonraker / OctoPrint / Bambu LAN / PrusaLink / 自定义 HTTP）
 
 切片完成后，XPrint 通过打印机自己的 HTTP API 上传并启动，不经过厂商云。
 
@@ -252,13 +252,36 @@ send(slice_id, "u1", confirm="PRINT u1 <slice_id>")  → 上传 G-code 并启动
 printer_cancel("u1", confirm="CANCEL PRINT u1")
 ```
 
-- 适配器：Moonraker（Klipper，`/server/files/upload` + `/printer/print/start`）、OctoPrint（`/api/files/local` + `/api/job`）与 Bambu LAN（MQTT/TLS `8883` + 隐式 FTPS `990` + 3MF 封装，社区协议实现，**尚未真机验证**）。厂商云未接入。
+- 适配器：Moonraker（Klipper，`/server/files/upload` + `/printer/print/start`）、OctoPrint（`/api/files/local` + `/api/job`）、Bambu LAN（MQTT/TLS `8883` + 隐式 FTPS `990` + 3MF 封装，社区协议实现，**尚未真机验证**）、PrusaLink（HTTP Digest + `/api/v1/files/...`；v1 不可用时回退旧版 `/api/printer`）以及声明式 `http`（端点、字段路径、状态名全部写在 `config.json`，适配未知打印机不用改代码）。厂商云未接入。
+- PrusaLink 用的是打印机屏幕上显示的 **password**，不是 API key；`username` 默认 `maker`，密码放 secrets 的 `providers.<id>` 或 `password_env`。
+- 自定义 `http` 示例（`printer_save(adapter="http", http={...})` 或直接写 config.json）：
+
+```json
+{
+  "id": "vendorp",
+  "adapter": "http",
+  "base_url": "http://192.168.1.60",
+  "enabled": true,
+  "http": {
+    "auth": {"type": "header", "header": "X-Api-Key"},
+    "status": {
+      "path": "/api/state",
+      "map": {"state": "state", "progress": "job.percent", "filename": "job.file",
+              "bed_temp": "temps.bed", "nozzle_temp": "temps.nozzle"},
+      "states": {"IDLE": "idle", "RUN": "printing", "PAUSE": "paused"}
+    },
+    "upload": {"path": "/api/files/{filename}", "method": "PUT"},
+    "start": {"path": "/api/files/{filename}/start", "method": "POST", "body": {"start": true}},
+    "cancel": {"path": "/api/job/stop", "method": "POST"}
+  }
+}
+```
 - 工具头：`toolheads` 支持 1–9（拓竹 X3D 类机型最多 9 个）。`send` 会读切片 G-code 里的 `T0..Tn`，实际用到的工具号超过打印机配置就拒绝上传并提示调大 `toolheads`。Snapmaker U1 是 4 头。
 - 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功；随后 `send(start=true)` 真实打印完成：`complete`，25/25 层，325 s，662 mm 耗材。
 - 已知限制：Snapmaker Orca 2.4.1 的 CLI 加载 U1 预设会段错误（GUI 不受影响）；当前用 upstream OrcaSlicer 2.5.0 + 扁平化 U1 预设（去掉 `inherits`，并把 `{if chamber_cooling_mode}` 这类厂商占位符展开成固定分支）绕开。预设放在工作区 `profiles/u1/`，目标配置指向它们。
 - 发送前检查：slice 必须成功、G-code 存在、打印机 idle、`printer_model` 与切片目标一致，任一不满足直接拒绝。
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
-- 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`。真机尚未验证（本机没有可用打印机）。
+- 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`；PrusaLink 与声明式 `http` 由单元测试覆盖（Digest 重试、上传头、启动/取消路径、状态映射），尚无对应真机。
 
 ## 工具
 

@@ -399,3 +399,37 @@ def test_printer_save_bambu_lan_requires_serial(tmp_path):
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_argument"
     assert "serial" in result["error"]["message"]
+
+
+def test_printer_save_http_requires_config(tmp_path):
+    runtime = _runtime(tmp_path)
+    bad = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "vendorp",
+            "confirm": "SAVE PRINTER vendorp",
+            "adapter": "http",
+            "base_url": "http://printer.local",
+        },
+    )
+    assert bad["ok"] is False
+    assert bad["error"]["code"] == "invalid_argument"
+    good = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "vendorp",
+            "confirm": "SAVE PRINTER vendorp",
+            "adapter": "http",
+            "base_url": "http://printer.local",
+            "http": {
+                "status": {"path": "/state", "map": {"state": "state"}},
+                "upload": {"path": "/files/{filename}"},
+                "start": {"path": "/files/{filename}/start"},
+                "cancel": {"path": "/job/stop"},
+            },
+        },
+    )
+    assert good["ok"] is True
+    assert good["printer"]["adapter"] == "http"

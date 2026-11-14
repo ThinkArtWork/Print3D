@@ -109,6 +109,10 @@ class PrinterSettings(BaseModel):
     toolheads: int = Field(default=1, ge=1, le=9)  # X3D-style printers ship up to 9
     serial: str | None = None
     access_code_env: str | None = None
+    username: str | None = None
+    password_env: str | None = None
+    storage: str = "local"
+    http: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     api_key_env: str | None = None
     timeout_s: float = Field(default=30.0, gt=1, le=300)
