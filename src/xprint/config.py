@@ -106,7 +106,7 @@ class PrinterSettings(BaseModel):
     model: str | None = None
     adapter: str
     base_url: str | None = None
-    toolheads: int = Field(default=1, ge=1, le=4)
+    toolheads: int = Field(default=1, ge=1, le=9)  # X3D-style printers ship up to 9
     enabled: bool = True
     api_key_env: str | None = None
     timeout_s: float = Field(default=30.0, gt=1, le=300)

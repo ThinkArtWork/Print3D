@@ -214,6 +214,9 @@ def test_parse_gcode_extracts_metadata(tmp_path: Path) -> None:
         "; model printing time: 13m 30s",
         "; HEADER_BLOCK_END",
         "G28",
+        "T0",
+        "G1 X10 Y10 E1",
+        "T4",
     ]
     lines += ["; " + ("x" * 100) for _ in range(60)]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -224,6 +227,7 @@ def test_parse_gcode_extracts_metadata(tmp_path: Path) -> None:
     assert metadata["model_seconds"] == 13 * 60 + 30
     assert metadata["filament_mm"] == pytest.approx(717.67)
     assert metadata["filament_g"] == pytest.approx(2.18)
+    assert metadata["toolheads"] == [0, 4]
     assert metadata["warnings"] == []
 
 

@@ -32,7 +32,13 @@ def _runtime(tmp_path: Path, printers: list[dict] | None = None) -> Runtime:
     return Runtime.create(workspace=ws)
 
 
-def _fake_slice(workspace: Workspace, *, printer_model: str = "Fake A1", ok: bool = True) -> str:
+def _fake_slice(
+    workspace: Workspace,
+    *,
+    printer_model: str = "Fake A1",
+    ok: bool = True,
+    toolheads: list[int] | None = None,
+) -> str:
     store = SliceStore(workspace)
     slice_id = new_slice_id()
     directory = store.directory(slice_id)
@@ -43,7 +49,7 @@ def _fake_slice(workspace: Workspace, *, printer_model: str = "Fake A1", ok: boo
         "ok": ok,
         "printer_model": printer_model,
         "gcode": {"file": "plate_1.gcode", "bytes": 12, "sha256": "deadbeef"},
-        "metadata": {"total_layers": 50},
+        "metadata": {"total_layers": 50, "toolheads": toolheads or []},
         "statistics": {},
     }
     (directory / "slice.json").write_text(json.dumps(record), encoding="utf-8")
@@ -316,3 +322,62 @@ def test_printer_status_unknown_printer(tmp_path) -> None:
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
     assert "printer_save" in (payload["error"].get("hint") or "")
+
+
+def test_printer_save_accepts_nine_toolheads(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    payload = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "x3d",
+            "confirm": "SAVE PRINTER x3d",
+            "adapter": "moonraker",
+            "base_url": "http://printer.local:7125",
+            "model": "Bambu X3D",
+            "toolheads": 9,
+        },
+    )
+    assert payload["ok"] is True
+    assert payload["printer"]["toolheads"] == 9
+    rejected = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "too-many",
+            "confirm": "SAVE PRINTER too-many",
+            "adapter": "moonraker",
+            "base_url": "http://printer.local:7125",
+            "toolheads": 10,
+        },
+    )
+    assert rejected["ok"] is False
+    assert "between 1 and 9" in rejected["error"]["message"]
+
+
+def test_send_refuses_more_toolheads_than_configured(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [
+            {
+                "id": "u1",
+                "adapter": "moonraker",
+                "base_url": "http://printer.local:7125",
+                "model": "Fake A1",
+                "toolheads": 4,
+            }
+        ],
+    )
+    fake = FakePrinter()
+    monkeypatch.setattr("xprint.server.build_printer", lambda *a, **k: fake)
+    slice_id = _fake_slice(runtime.workspace, toolheads=[0, 4])
+    payload = _call(
+        runtime,
+        "send",
+        {"slice_id": slice_id, "printer_id": "u1", "confirm": f"PRINT u1 {slice_id}"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "T4" in payload["error"]["message"]
+    assert "toolheads=..." in payload["error"]["hint"]
+    assert fake.uploaded == []

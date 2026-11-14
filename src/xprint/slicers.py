@@ -51,6 +51,7 @@ _FILAMENT_G_RE = re.compile(r"^;\s*filament used \[g\]\s*=\s*([\d.]+)", re.MULTI
 _FILAMENT_CM3_RE = re.compile(r"^;\s*filament used \[cm3\]\s*=\s*([\d.]+)", re.MULTILINE)
 _MAX_Z_RE = re.compile(r"^;\s*max_z_height:\s*([\d.]+)", re.MULTILINE)
 _FLAVOR_RE = re.compile(r"^;\s*gcode_flavor\s*=\s*(.+)$", re.MULTILINE)
+_TOOL_RE = re.compile(rb"^T(\d+)(?:\s|$)")
 _TOTAL_TIME_RE = re.compile(r"total estimated time:\s*([^;\n]+)", re.IGNORECASE)
 _MODEL_TIME_RE = re.compile(r"model printing time:\s*([^;\n]+)", re.IGNORECASE)
 _PRINTABLE_RE = re.compile(r"^;\s*printable_area\s*=\s*(.+)$", re.MULTILINE)
@@ -307,6 +308,13 @@ def parse_gcode(path: Path) -> dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
+    tools = sorted(
+        {
+            int(match.group(1))
+            for line in data.splitlines()
+            if (match := _TOOL_RE.match(line.strip()))
+        }
+    )
     printer = _PRINTER_RE.search(text)
     generated = _GENERATED_RE.search(text)
     layers = _LAYER_RE.search(text)
@@ -352,6 +360,7 @@ def parse_gcode(path: Path) -> dict[str, Any]:
         "gcode_flavor": flavor.group(1).strip() if flavor else None,
         "bed_mm": bed_mm,
         "bytes": len(data),
+        "toolheads": tools,
         "warnings": warnings,
     }
 

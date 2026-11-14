@@ -1690,8 +1690,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "base_url is required",
                     hint=("Moonraker: http://printer.local:7125 ; OctoPrint: http://printer.local"),
                 )
-            if not 1 <= int(toolheads) <= 4:
-                raise InvalidArgument("toolheads must be between 1 and 4")
+            if not 1 <= int(toolheads) <= 9:
+                raise InvalidArgument(
+                    "toolheads must be between 1 and 9",
+                    hint="Snapmaker U1 has 4 toolheads; a Bambu X3D-style machine can have 9.",
+                )
             entry = PrinterSettings(
                 id=printer_id,
                 adapter=chosen,
@@ -1791,6 +1794,28 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Slice was made for {sliced_for!r} but printer {printer_id} is "
                     f"{entry.model!r}",
                     hint="Slice with a target whose printer_model matches this printer.",
+                )
+            used = [int(item) for item in (record.get("metadata") or {}).get("toolheads", [])]
+            if used and max(used) >= entry.toolheads:
+                raise InvalidArgument(
+                    f"G-code uses tool T{max(used)} but printer {printer_id} declares "
+                    f"{entry.toolheads} toolhead(s)",
+                    details={"toolheads_used": used, "configured": entry.toolheads},
+                    hint=(
+                        "Add the missing toolheads with printer_save(toolheads=...), "
+                        "or slice for a machine with more extruders."
+                    ),
+                )
+            used = [int(item) for item in (record.get("metadata") or {}).get("toolheads", [])]
+            if used and max(used) >= entry.toolheads:
+                raise InvalidArgument(
+                    f"G-code uses tool T{max(used)} but printer {printer_id} declares "
+                    f"{entry.toolheads} toolhead(s)",
+                    details={"toolheads_used": used, "configured": entry.toolheads},
+                    hint=(
+                        "Add the missing toolheads with printer_save(toolheads=...), "
+                        "or slice for a machine with more extruders."
+                    ),
                 )
             adapter = build_printer(entry, secrets=rt.secrets)
             state = adapter.status()

@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint 发送，以及 **24 个工具**（含 Blender bpy、本地生成器、云端生成三条额外路径）。
+> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint 发送，以及 **24 个工具**；已在 Snapmaker U1 真机上完成切片与上传验证（含 Blender bpy、本地生成器、云端生成三条额外路径）。
 
 ## 文档
 
@@ -253,6 +253,9 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 ```
 
 - 适配器：Moonraker（Klipper，`/server/files/upload` + `/printer/print/start`）与 OctoPrint（`/api/files/local` + `/api/job`）。Bambu LAN（MQTT+FTPS）与厂商云未接入。
+- 工具头：`toolheads` 支持 1–9（拓竹 X3D 类机型最多 9 个）。`send` 会读切片 G-code 里的 `T0..Tn`，实际用到的工具号超过打印机配置就拒绝上传并提示调大 `toolheads`。Snapmaker U1 是 4 头。
+- 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功。**尚未启动真实打印**（床面状态未知）。
+- 已知限制：Snapmaker Orca 2.4.1 的 CLI 加载 U1 预设会段错误（GUI 不受影响）；当前用 upstream OrcaSlicer 2.5.0 + 扁平化 U1 预设（去掉 `inherits`，并把 `{if chamber_cooling_mode}` 这类厂商占位符展开成固定分支）绕开。预设放在工作区 `profiles/u1/`，目标配置指向它们。
 - 发送前检查：slice 必须成功、G-code 存在、打印机 idle、`printer_model` 与切片目标一致，任一不满足直接拒绝。
 - 打印是不可逆的物理动作：`send` 默认上传后立即开始，必须精确确认；不做自动重试。
 - 实测（Moonraker 本地 stub + 真实 Orca 切片）：20 mm 立方体 → 359,515 B G-code → 上传 → 启动 → 状态 `printing` → `printer_cancel` → `cancelled`。真机尚未验证（本机没有可用打印机）。
@@ -346,11 +349,11 @@ XPrint/
 | 导出模型文件 | ✅ `asset_export`（STL/STEP/脚本） |
 | 切片（G-code） | ✅ `slice_*` 四件套，外部 OrcaSlicer，异步任务 + 统计 |
 | 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert |
-| 切片后发送打印机 | ✅ Moonraker / OctoPrint 适配器，`send`（上传+启动）与 `printer_cancel`；真机未验证 |
+| 切片后发送打印机 | ✅ Moonraker / OctoPrint 适配器，`send`（上传+启动）与 `printer_cancel`；Snapmaker U1 真机已上传验证（未启动打印） |
 
 - **M0（完成）**：脚手架、配置/密钥、路径沙箱、任务状态机、MCP stdio+HTTP、资产版本库。
 - **M0.5（完成，2026-11-14）**：沙箱化 build123d 执行器、概念图生成、四视图预览、两条建模闭环、导出、11 个工具。
 - **M0.6（完成，2026-11-14）**：Blender bpy 路径（`blender_run`）与本地生成器适配器（`generate_local` + 后台任务），13 个工具。
 - **M1（完成，2026-11-14）**：云端文/图生 3D（Tripo V3、混元 3D Pro）异步任务、下载与 STL 转换，14 个工具。
 - **M2（完成，2026-11-14）**：切片器适配（Orca 外部进程，profile 运行时读取，overrides 私有副本）、`slice_capabilities`/`slice_plan`/`slice_run`/`slice_inspect`、G-code 与 statistics 双源元数据，18 个工具。Snapmaker U1 因厂商 CLI 段错误暂不可用。
-- **M3（完成，2026-11-14）**：打印机 CRUD、Moonraker/OctoPrint 适配器、`send` 上传+启动、`printer_cancel`，24 个工具。Bambu LAN 与厂商云未接入；真机未验证。
+- **M3（完成，2026-11-14）**：打印机 CRUD、Moonraker/OctoPrint 适配器、`send` 上传+启动、`printer_cancel`，24 个工具。Bambu LAN 与厂商云未接入；Snapmaker U1 真机已接入并完成上传验证（未启动打印）。

@@ -26,3 +26,6 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+
+# OrcaSlicer writes this log into the working directory
+00000.log
