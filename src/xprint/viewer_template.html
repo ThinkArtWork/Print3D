@@ -485,17 +485,70 @@
     spin = !spin;
     event.currentTarget.classList.toggle("on", spin);
   });
-  document.getElementById("export").addEventListener("click", (event) => {
-    const msg = document.getElementById("exportMsg");
+  document.getElementById("export").addEventListener("click", async (event) => {
+    event.preventDefault();
     const link = document.getElementById("export");
-    if (!link.getAttribute("href")) {
-      if (msg) msg.textContent = "当前版本没有可下载的 STL";
-      event.preventDefault();
-      return;
-    }
-    if (msg) {
-      msg.textContent = "正在下载 " + link.download;
-      setTimeout(() => { msg.textContent = ""; }, 5000);
+    const msg = document.getElementById("exportMsg");
+    const filename = (META.name || "model") + "-" + REVS[current].revision + ".stl";
+    try {
+      if (!currentPos) throw new Error("模型几何尚未加载");
+      const count = Math.floor(currentPos.length / 9);
+      const buffer = new ArrayBuffer(84 + count * 50);
+      const view = new DataView(buffer);
+      const header = "XPrint " + (META.name || "model") + " " + REVS[current].revision;
+      for (let i = 0; i < 80; i += 1) {
+        view.setUint8(i, i < header.length ? header.charCodeAt(i) : 0);
+      }
+      view.setUint32(80, count, true);
+      let offset = 84;
+      const ax = [0, 0, 0], bx = [0, 0, 0], nx = [0, 0, 0];
+      for (let t = 0; t < count; t += 1) {
+        const base = t * 9;
+        for (let k = 0; k < 3; k += 1) {
+          ax[k] = currentPos[base + 3 + k] - currentPos[base + k];
+          bx[k] = currentPos[base + 6 + k] - currentPos[base + k];
+        }
+        nx[0] = ax[1] * bx[2] - ax[2] * bx[1];
+        nx[1] = ax[2] * bx[0] - ax[0] * bx[2];
+        nx[2] = ax[0] * bx[1] - ax[1] * bx[0];
+        const len = Math.hypot(nx[0], nx[1], nx[2]) || 1;
+        for (let k = 0; k < 3; k += 1) view.setFloat32(offset + k * 4, nx[k] / len, true);
+        offset += 12;
+        for (let v = 0; v < 9; v += 1) {
+          view.setFloat32(offset, currentPos[base + v], true);
+          offset += 4;
+        }
+        view.setUint16(offset, 0, true);
+        offset += 2;
+      }
+      const blob = new Blob([buffer], { type: "model/stl" });
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{ description: "STL mesh", accept: { "model/stl": [".stl"] } }],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          if (msg) msg.textContent = "已保存 " + filename;
+          return;
+        } catch (pickerError) {
+          if (pickerError && pickerError.name === "AbortError") return;
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      if (msg) msg.textContent = "已生成 " + filename + "；若未开始下载，请在系统浏览器中打开此页";
+    } catch (error) {
+      if (msg) msg.textContent = "导出失败：" + (error && error.message ? error.message : error);
     }
   });
 
