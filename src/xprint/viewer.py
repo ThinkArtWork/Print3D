@@ -170,6 +170,29 @@ def entry_from_stl(
     )
 
 
+def write_legacy_redirect(directory: str | Path, *, title: str = "") -> Path:
+    """Replace a per-revision viewer with a redirect to the asset-level viewer."""
+
+    target = Path(directory) / VIEWER_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    label = escape(title or "3D viewer")
+    html = (
+        "<!doctype html>\n"
+        '<html lang="zh-CN"><head><meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{label}</title>\n"
+        '<meta http-equiv="refresh" content="0; url=../viewer.html">\n'
+        "<style>body{background:#141517;color:#e8e9ea;font:14px/1.6 -apple-system,"
+        "BlinkMacSystemFont,'Segoe UI',sans-serif;display:grid;place-items:center;"
+        "min-height:100vh;margin:0}a{color:#e8845a}</style></head>\n"
+        f'<body><p>查看器已合并到资产目录：<a href="../viewer.html">{label}</a></p>'
+        "</body></html>\n"
+    )
+    target.write_text(html, encoding="utf-8")
+    target.chmod(0o644)
+    return target
+
+
 def write_collection_viewer(
     directory: str | Path,
     entries: list[dict],

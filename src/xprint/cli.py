@@ -269,7 +269,12 @@ def cmd_view(args: argparse.Namespace) -> int:
     import webbrowser
 
     from .assets import AssetStore
-    from .viewer import VIEWER_FILE, collection_html, entry_from_stl
+    from .viewer import (
+        VIEWER_FILE,
+        collection_html,
+        entry_from_stl,
+        write_legacy_redirect,
+    )
 
     ws, _, _ = _load(args)
     assets = AssetStore(ws)
@@ -317,6 +322,10 @@ def cmd_view(args: argparse.Namespace) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
     path.chmod(0o644)
+    for entry in entries:
+        legacy_dir = assets.revision_dir(args.asset_id, entry["revision"])
+        if (legacy_dir / VIEWER_FILE).is_file():
+            write_legacy_redirect(legacy_dir, title=name)
     result = {
         "path": path,
         "bytes": len(html.encode("utf-8")),

@@ -64,6 +64,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 - 构建成功时（`model_build`、`blender_run`、`generate_local` / `generate_cloud`）自动重写这个文件并返回 `viewer_file`；宿主执行 `present(viewer_file)` 即可；
 - 旧资产或需要手动刷新时调用 `model_view(asset_id, confirm="VIEW <asset_id>")`；传 `revision="v001"` 可让查看器默认打开该版本；
 - 命令行：`xprint view <asset_id> [--revision v001] [--open]`。
+- 旧版本目录里遗留的 `vNNN/viewer.html` 会自动改成 526 字节的跳转页，指向资产级查看器；聊天里早先的旧卡片点开也能落到带下拉框的新文件。
 
 几何以 base64 内嵌，单文件、无 CDN、无服务端。打开后：
 

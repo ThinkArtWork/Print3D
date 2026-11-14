@@ -73,7 +73,7 @@ from .slicers import (
     slice_stl,
     validate_slice_id,
 )
-from .viewer import entry_from_stl, write_collection_viewer
+from .viewer import entry_from_stl, write_collection_viewer, write_legacy_redirect
 from .workspace import Workspace, atomic_write_bytes
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -315,6 +315,13 @@ def _asset_viewer(
         )
     except (OSError, ValueError) as exc:
         return {"viewer_error": f"{type(exc).__name__}: {exc}"}
+    for entry in entries:
+        legacy_dir = assets.revision_dir(asset_id, entry["revision"])
+        if (legacy_dir / "viewer.html").is_file():
+            try:
+                write_legacy_redirect(legacy_dir, title=name or asset_id)
+            except OSError:
+                continue
     return {
         "viewer_path": rt.workspace.rel(info["path"]),
         "viewer_file": str(info["path"]),

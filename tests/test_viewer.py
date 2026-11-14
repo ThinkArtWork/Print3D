@@ -144,3 +144,14 @@ def test_collection_viewer_embeds_every_revision_in_one_file(tmp_path) -> None:
     assert written["path"] == target
     assert target.is_file()
     assert '"revision": "v002"' in target.read_text(encoding="utf-8")
+
+
+def test_legacy_per_revision_viewer_redirects_to_the_asset_viewer(tmp_path) -> None:
+    from xprint.viewer import write_legacy_redirect
+
+    target = write_legacy_redirect(tmp_path / "v001", title="plate")
+    text = target.read_text(encoding="utf-8")
+    assert target.name == "viewer.html"
+    assert 'http-equiv="refresh"' in text
+    assert "url=../viewer.html" in text
+    assert "plate" in text
