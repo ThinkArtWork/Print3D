@@ -14,7 +14,14 @@ window.__ModuleLoader__.load({
     const h = React.createElement
 
     const NS = 'xprint'
-    const ENDPOINT = 'http://127.0.0.1:8765/mcp'
+    const DIRECT_ENDPOINT = 'http://127.0.0.1:8765/mcp'
+    // The Host half proxies MCP under the DSH origin. That keeps the panel
+    // working when the page has a CSP connect-src or a non-HTTP origin, and it
+    // avoids depending on a fixed port from the browser side.
+    const PROXY_ENDPOINT = /^https?:$/.test(window.location.protocol)
+      ? `${window.location.origin}/api/xprint/mcp`
+      : null
+    let endpoint = PROXY_ENDPOINT || DIRECT_ENDPOINT
     const PROTOCOL = '2025-06-18'
     const PANEL_ID = 'xprint'
 
@@ -147,32 +154,54 @@ window.__ModuleLoader__.load({
         accept: 'application/json, text/event-stream',
       }
       if (sessionId) headers['mcp-session-id'] = sessionId
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 60000)
+
+      async function send(target) {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 60000)
+        try {
+          return await fetch(target, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          })
+        } catch (error) {
+          if (error && error.name === 'AbortError') {
+            throw new Error(`XPrint did not answer within 60s (${target})`)
+          }
+          throw new Error(`Cannot reach XPrint at ${target}`)
+        } finally {
+          clearTimeout(timer)
+        }
+      }
+
       let response
       try {
-        response = await fetch(ENDPOINT, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        })
-      } catch (error) {
-        if (error && error.name === 'AbortError') {
-          throw new Error(`XPrint did not answer within 60s (${ENDPOINT})`)
+        response = await send(endpoint)
+        // The Host half may still be the previous generation (no proxy route
+        // yet), or the page may be a static harness. A non-MCP status with a
+        // non-JSON body is the web server's fallback, not an MCP reply.
+        if (
+          [404, 405, 501].includes(response.status) &&
+          endpoint !== DIRECT_ENDPOINT &&
+          !String(response.headers.get('content-type') || '').includes('application/json')
+        ) {
+          endpoint = DIRECT_ENDPOINT
+          response = await send(endpoint)
         }
-        throw new Error(`Cannot reach XPrint at ${ENDPOINT}`)
-      } finally {
-        clearTimeout(timer)
+      } catch (error) {
+        if (endpoint === DIRECT_ENDPOINT) throw error
+        endpoint = DIRECT_ENDPOINT
+        response = await send(endpoint)
       }
       const header = response.headers.get('mcp-session-id')
       if (header) sessionId = header
       const text = await response.text()
       if (!response.ok) {
-        const error = new Error(`XPrint returned HTTP ${response.status}`)
-        error.status = response.status
-        error.body = text.slice(0, 300)
-        throw error
+        const failure = new Error(`XPrint returned HTTP ${response.status}`)
+        failure.status = response.status
+        failure.body = text.slice(0, 300)
+        throw failure
       }
       return { text, messages: parseMessages(text) }
     }
