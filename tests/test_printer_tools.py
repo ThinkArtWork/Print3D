@@ -691,7 +691,12 @@ def test_printer_status_reports_capabilities(tmp_path, monkeypatch) -> None:
     caps = payload["capabilities"]
     assert caps["build_plates"] == ["textured_pei", "cool_plate"]
     assert caps["build_plate_detection"] is True
-    assert caps["flow_calibration"] == {"supported": True, "factors_configured": True}
+    assert caps["flow_calibration"] == {
+        "supported": True,
+        "factors_configured": True,
+        "trim_unused_tools": False,
+        "tool_macros": [],
+    }
     assert payload["flow_calibration"]["factors"] == {"T0": 0.04}
 
 

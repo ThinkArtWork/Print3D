@@ -312,6 +312,8 @@ def _printer_capabilities(entry: Any, *, adapter: Any = None) -> dict[str, Any]:
             "supported": bool(calibration.get("enable_gcode"))
             and entry.adapter.lower() in GCODE_CAPABLE_ADAPTERS,
             "factors_configured": bool(calibration.get("factors_url")),
+            "trim_unused_tools": bool(calibration.get("trim_unused_tools")),
+            "tool_macros": list(calibration.get("tool_macros") or []),
         },
     }
 
@@ -399,6 +401,11 @@ def _slice_options(
     build_plate: str = "",
     flow_ratio: float = 0,
     pressure_advance: float = -1,
+    line_width: float = 0,
+    outer_wall_line_width: float = 0,
+    inner_wall_line_width: float = 0,
+    top_surface_line_width: float = 0,
+    arc_fitting: bool = False,
 ) -> SliceOptions | None:
     """Build SliceOptions from MCP arguments (0 / -1 mean "unset")."""
 
@@ -426,6 +433,11 @@ def _slice_options(
         nozzle_temp=count(nozzle_temp),
         flow_ratio=flow,
         pressure_advance=advance,
+        line_width=positive(line_width),
+        outer_wall_line_width=positive(outer_wall_line_width),
+        inner_wall_line_width=positive(inner_wall_line_width),
+        top_surface_line_width=positive(top_surface_line_width),
+        arc_fitting=bool(arc_fitting),
     )
     if options.resolved() == SliceOptions().resolved():
         return None
@@ -1798,7 +1810,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Dry-run a slice: resolve the target presets, report bed size and model "
             "checks, preview process/material options (material, layer_height, infill, "
             "infill_density, walls, top_shells, bottom_shells, strength, bed_temp, "
-            "nozzle_temp, build_plate, flow_ratio, pressure_advance), optionally pinned to "
+            "nozzle_temp, build_plate, flow_ratio, pressure_advance, line_width, outer_wall_line_width, inner_wall_line_width, top_surface_line_width, arc_fitting), optionally pinned to "
             "a printer filament slot (printer + slot: multi-tool or AMS). Read-only: it "
             "reports the overrides and the slot material that slice_run would use."
         ),
@@ -1822,6 +1834,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         nozzle_temp: int = 0,
         flow_ratio: float = 0,
         pressure_advance: float = -1,
+        line_width: float = 0,
+        outer_wall_line_width: float = 0,
+        inner_wall_line_width: float = 0,
+        top_surface_line_width: float = 0,
+        arc_fitting: bool = False,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -1839,6 +1856,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 build_plate=build_plate,
                 flow_ratio=flow_ratio,
                 pressure_advance=pressure_advance,
+                line_width=line_width,
+                outer_wall_line_width=outer_wall_line_width,
+                inner_wall_line_width=inner_wall_line_width,
+                top_surface_line_width=top_surface_line_width,
+                arc_fitting=arc_fitting,
             )
             options, slot_info = _apply_slot(
                 rt, options, printer_id=printer, slot=slot, build_plate=build_plate
@@ -1920,6 +1942,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 if binary is not None
                 else []
             )
+            printer_cfg = _printer_entry(rt, printer) if printer else None
+            calibration = dict(printer_cfg.flow_calibration or {}) if printer_cfg else {}
             return {
                 "ok": True,
                 "writes_performed": False,
@@ -1931,6 +1955,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "profiles": prepared.to_dict(),
                 "options": options_summary,
                 "slot": slot_info,
+                "flow_calibration": {
+                    "trim_unused_tools": bool(calibration.get("trim_unused_tools")),
+                    "tool_macros": list(calibration.get("tool_macros") or []),
+                },
                 "profile_overrides": profile_overrides,
                 "bed_mm": list(bed) if bed else None,
                 "checks": checks,
@@ -1951,7 +1979,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "OrcaSlicer CLI, optionally with process/material options (material implies "
             "nozzle/bed temperatures; layer_height, infill, infill_density, walls, "
             "top_shells, bottom_shells, strength override the process preset; flow_ratio and "
-            "pressure_advance override the filament flow/PA; build_plate picks the plate; "
+            "pressure_advance override the filament flow/PA; line_width / outer_wall_line_width / "
+            "inner_wall_line_width / top_surface_line_width override extrusion widths; "
+            "arc_fitting emits G2/G3 arcs for rounder holes; build_plate picks the plate; "
             "printer + slot pin the G-code to a filament slot and take its material/colour). "
             "Runs as an async job (poll job_status). confirm must be exactly "
             "'SLICE <asset_id> <target>'."
@@ -1978,6 +2008,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         nozzle_temp: int = 0,
         flow_ratio: float = 0,
         pressure_advance: float = -1,
+        line_width: float = 0,
+        outer_wall_line_width: float = 0,
+        inner_wall_line_width: float = 0,
+        top_surface_line_width: float = 0,
+        arc_fitting: bool = False,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -2001,6 +2036,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 build_plate=build_plate,
                 flow_ratio=flow_ratio,
                 pressure_advance=pressure_advance,
+                line_width=line_width,
+                outer_wall_line_width=outer_wall_line_width,
+                inner_wall_line_width=inner_wall_line_width,
+                top_surface_line_width=top_surface_line_width,
+                arc_fitting=arc_fitting,
             )
             options, slot_info = _apply_slot(
                 rt, options, printer_id=printer, slot=slot, build_plate=build_plate
@@ -2035,6 +2075,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             budget = float(timeout_s or configured.timeout_s)
             slice_id = new_slice_id()
             slice_dir = rt.workspace.slices_dir / slice_id
+            printer_cfg = _printer_entry(rt, printer) if printer else None
 
             def work(job_id: str) -> dict[str, Any]:
                 rt.store.set_progress(job_id, 0.1)
@@ -2045,6 +2086,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     timeout_s=budget,
                     slicer_path=configured.slicer_path,
                     options=options,
+                    flow_calibration=printer_cfg.flow_calibration if printer_cfg else None,
                 )
                 record = SliceStore(rt.workspace).save_result(
                     slice_id=slice_id,

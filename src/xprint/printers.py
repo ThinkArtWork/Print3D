@@ -139,6 +139,8 @@ FLOW_CALIBRATION_KEYS = (
     "factors_url",
     "factors_key",
     "extruder_keys",
+    "trim_unused_tools",
+    "tool_macros",
 )
 
 
@@ -153,10 +155,14 @@ def normalise_flow_calibration(value: dict[str, Any] | None) -> dict[str, Any]:
         raw = value.get(key)
         if raw in (None, ""):
             continue
-        if key == "extruder_keys":
+        if key in {"extruder_keys", "tool_macros"}:
             if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
-                raise InvalidArgument("flow_calibration.extruder_keys must be a list of strings")
+                raise InvalidArgument(f"flow_calibration.{key} must be a list of strings")
             out[key] = [item.strip() for item in raw if item.strip()]
+        elif key == "trim_unused_tools":
+            if not isinstance(raw, bool):
+                raise InvalidArgument("flow_calibration.trim_unused_tools must be a boolean")
+            out[key] = raw
         else:
             if not isinstance(raw, str):
                 raise InvalidArgument(f"flow_calibration.{key} must be a string")

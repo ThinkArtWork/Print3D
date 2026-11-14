@@ -52,6 +52,9 @@ _FILAMENT_CM3_RE = re.compile(r"^;\s*filament used \[cm3\]\s*=\s*([\d.]+)", re.M
 _MAX_Z_RE = re.compile(r"^;\s*max_z_height:\s*([\d.]+)", re.MULTILINE)
 _FLAVOR_RE = re.compile(r"^;\s*gcode_flavor\s*=\s*(.+)$", re.MULTILINE)
 _TOOL_RE = re.compile(rb"^T(\d+)(?:\s|$)")
+_TOOL_MACRO_RE = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s+.*?\bEXTRUDER\s*=\s*(\d+)\b", re.IGNORECASE
+)
 _TOTAL_TIME_RE = re.compile(r"total estimated time:\s*([^;\n]+)", re.IGNORECASE)
 _MODEL_TIME_RE = re.compile(r"model printing time:\s*([^;\n]+)", re.IGNORECASE)
 _PRINTABLE_RE = re.compile(r"^;\s*printable_area\s*=\s*(.+)$", re.MULTILINE)
@@ -182,6 +185,11 @@ class SliceOptions:
     build_plate: str = ""
     flow_ratio: float | None = None
     pressure_advance: float | None = None
+    line_width: float | None = None
+    outer_wall_line_width: float | None = None
+    inner_wall_line_width: float | None = None
+    top_surface_line_width: float | None = None
+    arc_fitting: bool = False
 
     def resolved(self) -> dict[str, Any]:
         material = self.material.strip().upper()
@@ -248,6 +256,15 @@ class SliceOptions:
         pressure_advance = self.pressure_advance
         if pressure_advance is not None and not 0.0 <= float(pressure_advance) <= 0.2:
             raise InvalidArgument("pressure_advance must be between 0 and 0.2")
+        widths = {
+            "line_width": self.line_width,
+            "outer_wall_line_width": self.outer_wall_line_width,
+            "inner_wall_line_width": self.inner_wall_line_width,
+            "top_surface_line_width": self.top_surface_line_width,
+        }
+        for name, value in widths.items():
+            if value is not None and not 0.2 <= float(value) <= 1.0:
+                raise InvalidArgument(f"{name} must be between 0.2 and 1.0 mm")
         if not 0 <= int(self.toolhead) <= 8:
             raise InvalidArgument("toolhead must be between 0 and 8")
 
@@ -266,6 +283,11 @@ class SliceOptions:
             "build_plate": plate or None,
             "flow_ratio": float(flow_ratio) if flow_ratio is not None else None,
             "pressure_advance": (float(pressure_advance) if pressure_advance is not None else None),
+            **{
+                name: (round(float(value), 3) if value is not None else None)
+                for name, value in widths.items()
+            },
+            "arc_fitting": bool(self.arc_fitting),
         }
 
     def process_overrides(self) -> dict[str, str]:
@@ -285,6 +307,16 @@ class SliceOptions:
             overrides["bottom_shell_layers"] = str(data["bottom_shells"])
         if data["build_plate"]:
             overrides["curr_bed_type"] = BUILD_PLATES[data["build_plate"]]["label"]
+        for name in (
+            "line_width",
+            "outer_wall_line_width",
+            "inner_wall_line_width",
+            "top_surface_line_width",
+        ):
+            if data.get(name) is not None:
+                overrides[name] = f"{data[name]:g}"
+        if data.get("arc_fitting"):
+            overrides["enable_arc_fitting"] = "1"
         return overrides
 
     def filament_overrides(self) -> dict[str, str]:
@@ -763,6 +795,50 @@ def parse_gcode(path: Path) -> dict[str, Any]:
     }
 
 
+def trim_unused_tool_macros(
+    path: Path,
+    *,
+    used_tools: list[int] | None,
+    flow_calibration: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Drop start-macro lines that heat/feed/calibrate unused toolheads.
+
+    Vendor start macros often run a per-tool macro for every head (for example
+    ``SM_PRINT_FLOW_CALIBRATE EXTRUDER=0..3``).  A print that only uses T0 pays
+    for all four.  When the printer config opts in, remove the lines for tools
+    the sliced G-code never uses, so enabling flow calibration only calibrates
+    the heads that matter.
+    """
+    config = flow_calibration or {}
+    if not config.get("trim_unused_tools"):
+        return {"enabled": False, "removed_lines": 0}
+    macros = {str(item).upper() for item in (config.get("tool_macros") or []) if str(item).strip()}
+    used = {int(item) for item in (used_tools or [])}
+    if not macros:
+        return {"enabled": False, "removed_lines": 0, "reason": "no tool_macros configured"}
+    if not used:
+        return {"enabled": False, "removed_lines": 0, "reason": "no used toolheads detected"}
+
+    data = path.read_bytes()
+    kept: list[bytes] = []
+    removed: list[str] = []
+    for line in data.splitlines(keepends=True):
+        match = _TOOL_MACRO_RE.match(line.decode("utf-8", errors="ignore"))
+        if match and match.group(1).upper() in macros and int(match.group(2)) not in used:
+            removed.append(match.group(0).strip())
+            continue
+        kept.append(line)
+    if removed:
+        path.write_bytes(b"".join(kept))
+    return {
+        "enabled": True,
+        "macros": sorted(macros),
+        "used_tools": sorted(used),
+        "removed_lines": len(removed),
+        "removed": removed[:12],
+    }
+
+
 def parse_machine_bed(machine: Path) -> tuple[float, float] | None:
     """Extract the printable bed size from a machine preset (axis-aligned)."""
     try:
@@ -859,6 +935,7 @@ def slice_stl(
     timeout_s: float | None = None,
     slicer_path: str | None = None,
     options: SliceOptions | None = None,
+    flow_calibration: dict[str, Any] | None = None,
 ) -> SliceResult:
     """Slice ``stl`` with ``target`` and return G-code plus real statistics."""
     stl = Path(stl)
@@ -958,6 +1035,12 @@ def slice_stl(
 
     gcode = gcodes[-1]
     metadata = parse_gcode(gcode)
+    trim = trim_unused_tool_macros(
+        gcode, used_tools=metadata.get("toolheads"), flow_calibration=flow_calibration
+    )
+    metadata["tool_macro_trim"] = trim
+    if trim.get("removed_lines"):
+        metadata["bytes"] = gcode.stat().st_size
     summary = statistics.get("summary") if isinstance(statistics.get("summary"), dict) else {}
     if metadata.get("total_layers") is None and summary.get("layer_count"):
         metadata["total_layers"] = int(summary["layer_count"])
@@ -987,6 +1070,7 @@ def slice_stl(
         "model_volume_mm3": model_stats.get("volume_mm3"),
         "model_watertight": model_stats.get("watertight"),
         "bed_mm": list(bed) if bed else None,
+        "tool_macro_trim": metadata.get("tool_macro_trim"),
     }
     if bed and model_stats.get("bbox_mm"):
         width, depth = bed

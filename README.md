@@ -278,9 +278,14 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
 | `build_plate` | 打印板类型：`textured_pei`（默认纹理 PEI）/ `smooth_pei`（光面 PEI，Orca 里叫 High Temp Plate）/ `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`；选择后 Orca 用对应的热床温度键，温度按材料自动调整 |
 | `flow_ratio` | 挤出流量倍率 0.5–1.5，写入 `filament_flow_ratio`；预设 Generic PLA 是 0.98，Matte/高速料可试 1.00–1.05 |
 | `pressure_advance` | 压力提前 K 值 0–0.2，写入 `pressure_advance` 并启用；可先用 `printer_status` 读取打印机已校准的值（U1 的 `flow_calibration.factors.extruder`） |
+| `line_width` | 全局线宽 mm（0.2–1.0），写入 `line_width`；不改则沿用预设 |
+| `outer_wall_line_width` / `inner_wall_line_width` | 外/内墙线宽 mm；外墙偏宽会让转角鼓包，0.4 喷嘴可先试 0.40–0.42 |
+| `top_surface_line_width` | 顶面线宽 mm；顶面不平整时先把它降到 0.40 左右，再配合流量微调 |
+| `arc_fitting` | 是否输出 G2/G3 圆弧（默认 false）；Klipper 固件支持时开启，圆孔更圆、文件更小 |
 | `printer` + `slot` | 绑定某台打印机的耗材槽（多喷头按工具头、单喷头 AMS 按槽位）：自动取该槽的材质/颜色，材质冲突直接拒绝；`slot=1` 表示 G-code 用 `T1` |
 
 - 流量：`flow_ratio` 直接改 `filament_flow_ratio`；`pressure_advance` 改 `pressure_advance` 并置 `enable_pressure_advance=1`。`printer_status` 会尽量读取打印机已存的校准系数（Snapmaker 的 `flow_calibrator.json`，按工具头给出 K 值），可把它作为 `pressure_advance` 传入。
+- 实测调参（U1，PLA Matte，0.2 mm，30×20×6 小板）：`flow_ratio=1.03` 时外墙出现挤出鼓包、顶面不平，孔壁/R3 圆角正常；把流量降到 `1.00`、外墙/顶面线宽从 0.42 降到 0.40，并开启 `arc_fitting`，作为下一轮验证组合。线宽和流量要一起看：有效挤出量 ≈ 流量 × 线宽。
 - 打印板温度：`textured_pei` / `smooth_pei` 按材料温度；`cool_plate`、`textured_cool` 各降 15 °C，`engineering_plate` 升 10 °C，`supertack` 降 5 °C。对应到 Orca 的 `curr_bed_type` 和 `*_plate_temp` 键，不再把所有板型的温度键写成同一个值。
 - `overrides` 与上述参数通过复制 vendor 预设到私有 datadir、改写 process/filament JSON 实现；用户安装的 profile 不动。独立扁平 profile（如 U1）则复制到本次切片工作目录的 `profiles/` 后改写。
 - `slice_plan` 只预览 `profile_overrides`，不写文件；`slice_run` 的 `slice_inspect` 记录里保留本次 `options`。
@@ -375,10 +380,14 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
     "disable_gcode": "FLOW_CALIBRATE ENABLE=0",
     "factors_url": "/server/files/config/calibration.json",
     "factors_key": "pa.factor",
-    "extruder_keys": ["extruder", "extruder1"]
+    "extruder_keys": ["extruder", "extruder1"],
+    "trim_unused_tools": true,
+    "tool_macros": ["PRINT_EXTRUDER_PREHEAT", "PRINT_AUTO_FEED", "PRINT_FLOW_CALIBRATE"]
   }
 }
 ```
+
+`trim_unused_tools` + `tool_macros` 用于多头机器：切片完成后，XPrint 扫描起始 G-code，把 `EXTRUDER=n` 且 n 不在本次使用工具头里的预热/进料/校准行删掉。例如 U1 只用到 T0 时，G-code 里只保留 T0 的预热/进料/校准行。注意：U1 的启动总时长主要花在床网、喷嘴清洁和预热上；实测裁剪前后总启动都约 5.5 分钟，因此这项优化在 U1 上收益有限，但在“每个头都要实际进料校准”的机器上会明显。它是可选的文本级后处理，只匹配配置里列出的宏名，不会改动模型路径或挤出段；不配置则保持厂商原始行为。
 
 | 适配器 / 机型 | 切片参数 | 槽位匹配 | 板型选择 | 自动读板型 | 校准命令 | 读校准系数 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -388,7 +397,8 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 | PrusaLink | ✅ | ✅ | ✅ | 未实现 | ❌（无公开 G-code 端点） | ❌ |
 | 声明式 HTTP | ✅ | ✅ | ✅ | 未实现 | 需适配器扩展 | 需适配器扩展 |
 
-- `printer_status` 的 `capabilities` 会直接报告 `flow_calibration.supported` / `factors_configured`、`build_plates`、`build_plate_detection`；`printer_list` 报告配置层面的 `flow_calibration_configured`，不需要联网。
+- `printer_status` 的 `capabilities` 会直接报告 `flow_calibration.supported` / `factors_configured` / `trim_unused_tools`、`build_plates`、`build_plate_detection`；`printer_list` 报告配置层面的 `flow_calibration_configured`，不需要联网。
+- 按需校准是“起始宏裁剪”，不改变固件里的 `flow_calib_extruders` 全局开关；如果厂商宏名字不同，把实际宏名填进 `tool_macros` 即可，未列出的宏不会被碰。
 - `build_plates` 为空表示接受切片器认识的所有板型；非空时 `slice_plan`/`slice_run` 会拒绝不在列表里的板型，并列出支持的取值。
 - 板型 id 统一用 XPrint 的 `textured_pei` / `smooth_pei` / `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`，由切片适配器映射到 Orca 的 `curr_bed_type`；换切片器时只需在切片适配器里换映射，不改工具参数。
 - 自动读板型依赖固件暴露字段；目前只有厂商返回 `build_plate` / `bed_type` 等 JSON 字段时才会生效，U1 不返回，所以仍需首次手选。

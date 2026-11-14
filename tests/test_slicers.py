@@ -23,6 +23,7 @@ from xprint.slicers import (
     probe_slicer,
     resolve_profiles,
     slice_stl,
+    trim_unused_tool_macros,
     validate_slice_id,
 )
 
@@ -442,3 +443,81 @@ def test_slice_options_apply_flow_and_pressure_advance() -> None:
         SliceOptions(flow_ratio=2).resolved()
     with pytest.raises(InvalidArgument):
         SliceOptions(pressure_advance=0.5).resolved()
+
+
+def test_trim_unused_tool_macros_keeps_only_used_heads(tmp_path: Path) -> None:
+    gcode = tmp_path / "plate.gcode"
+    gcode.write_text(
+        "SM_PRINT_EXTRUDER_PREHEAT EXTRUDER=1 TEMP=140\n"
+        "SM_PRINT_AUTO_FEED EXTRUDER=0\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0\n"
+        "SM_PRINT_AUTO_FEED EXTRUDER=1\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n"
+        "G1 X1 Y1 E1\n",
+        encoding="utf-8",
+    )
+    info = trim_unused_tool_macros(
+        gcode,
+        used_tools=[0],
+        flow_calibration={
+            "trim_unused_tools": True,
+            "tool_macros": [
+                "SM_PRINT_EXTRUDER_PREHEAT",
+                "SM_PRINT_AUTO_FEED",
+                "SM_PRINT_FLOW_CALIBRATE",
+            ],
+        },
+    )
+    assert info["removed_lines"] == 3
+    assert info["used_tools"] == [0]
+    lines = gcode.read_text(encoding="utf-8").splitlines()
+    assert "SM_PRINT_AUTO_FEED EXTRUDER=0" in lines
+    assert "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0" in lines
+    assert not any("EXTRUDER=1" in line for line in lines)
+    assert "G1 X1 Y1 E1" in lines
+
+
+def test_trim_unused_tool_macros_is_opt_in(tmp_path: Path) -> None:
+    gcode = tmp_path / "plate.gcode"
+    original = "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n"
+    gcode.write_text(original, encoding="utf-8")
+    info = trim_unused_tool_macros(
+        gcode, used_tools=[0], flow_calibration={"tool_macros": ["SM_PRINT_FLOW_CALIBRATE"]}
+    )
+    assert info == {"enabled": False, "removed_lines": 0}
+    assert gcode.read_text(encoding="utf-8") == original
+
+    info = trim_unused_tool_macros(
+        gcode, used_tools=[], flow_calibration={"trim_unused_tools": True}
+    )
+    assert info["enabled"] is False
+    assert gcode.read_text(encoding="utf-8") == original
+
+
+def test_slice_options_line_widths_override_process_keys() -> None:
+    options = SliceOptions(
+        material="PLA",
+        line_width=0.42,
+        outer_wall_line_width=0.4,
+        inner_wall_line_width=0.44,
+        top_surface_line_width=0.4,
+    )
+    resolved = options.resolved()
+    assert resolved["outer_wall_line_width"] == 0.4
+    overrides = options.process_overrides()
+    assert overrides["line_width"] == "0.42"
+    assert overrides["outer_wall_line_width"] == "0.4"
+    assert overrides["top_surface_line_width"] == "0.4"
+    assert overrides["inner_wall_line_width"] == "0.44"
+
+    with pytest.raises(InvalidArgument, match="line_width"):
+        SliceOptions(line_width=0.1).resolved()
+    with pytest.raises(InvalidArgument, match="outer_wall_line_width"):
+        SliceOptions(outer_wall_line_width=2).resolved()
+
+
+def test_slice_options_arc_fitting_is_opt_in() -> None:
+    assert "enable_arc_fitting" not in SliceOptions(material="PLA").process_overrides()
+    options = SliceOptions(material="PLA", arc_fitting=True)
+    assert options.resolved()["arc_fitting"] is True
+    assert options.process_overrides()["enable_arc_fitting"] == "1"

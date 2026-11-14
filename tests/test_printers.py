@@ -10,7 +10,12 @@ import respx
 
 from xprint.config import PrinterSettings, Secrets
 from xprint.errors import AdapterUnavailable, AdapterUnknown, InvalidArgument
-from xprint.printers import MoonrakerPrinter, OctoPrintPrinter, build_printer
+from xprint.printers import (
+    MoonrakerPrinter,
+    OctoPrintPrinter,
+    build_printer,
+    normalise_flow_calibration,
+)
 
 MOON = "http://printer.local:7125"
 OCTO = "http://octo.local"
@@ -241,3 +246,22 @@ def test_octoprint_runs_configured_calibration_gcode() -> None:
     printer.set_flow_calibrate(True)
     assert route.called
     assert json.loads(route.calls[0].request.content) == {"commands": ["FLOW_CALIBRATE ENABLE=1"]}
+
+
+def test_flow_calibration_trim_keys_are_validated() -> None:
+    config = normalise_flow_calibration(
+        {
+            "enable_gcode": "CALIBRATE=1",
+            "trim_unused_tools": True,
+            "tool_macros": ["SM_PRINT_FLOW_CALIBRATE", " "],
+        }
+    )
+    assert config["trim_unused_tools"] is True
+    assert config["tool_macros"] == ["SM_PRINT_FLOW_CALIBRATE"]
+
+    with pytest.raises(InvalidArgument, match="trim_unused_tools"):
+        normalise_flow_calibration({"trim_unused_tools": "yes"})
+    with pytest.raises(InvalidArgument, match="tool_macros"):
+        normalise_flow_calibration({"tool_macros": "SM_PRINT_FLOW_CALIBRATE"})
+    with pytest.raises(InvalidArgument, match="Unknown flow_calibration"):
+        normalise_flow_calibration({"trim": True})
