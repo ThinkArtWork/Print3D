@@ -1,12 +1,14 @@
 """Cloud image-to-3D / text-to-3D providers.
 
-Two adapters are built in:
+Three adapters are built in:
 
-* ``tripo``   — Tripo V3 API (``https://openapi.tripo3d.com/v3``), Bearer key.
-* ``hunyuan`` — Tencent Cloud Hunyuan 3D Pro (``ai3d.tencentcloudapi.com``,
+* ``tripo``          — Tripo V3 API (``https://openapi.tripo3d.com/v3``), Bearer key.
+* ``hunyuan_openai`` — Tencent Hunyuan 3D OpenAI-compatible API
+  (``https://api.ai3d.cloud.tencent.com``), plain API-key Authorization.
+* ``hunyuan``        — Tencent Cloud Hunyuan 3D Pro (``ai3d.tencentcloudapi.com``,
   TC3-HMAC-SHA256 signed with SecretId/SecretKey).
 
-Both are asynchronous: :meth:`submit` returns a provider task id and
+All are asynchronous: :meth:`submit` returns a provider task id and
 :meth:`poll` reports status/progress/result URLs.  Polling and downloading
 belong to the caller (the MCP server drives them inside a job).
 """
@@ -345,6 +347,140 @@ class HunyuanCloud:
         )
 
 
+def _hunyuan_openai_data(payload: Any) -> dict[str, Any]:
+    """Unwrap the Hunyuan OpenAI-compatible response and surface API errors."""
+
+    if not isinstance(payload, dict):
+        raise AdapterUnavailable("Hunyuan 3D returned an unexpected response")
+    nested = payload.get("Response")
+    data = nested if isinstance(nested, dict) else payload
+    error = data.get("Error")
+    if isinstance(error, dict):
+        message = error.get("Message") or error.get("Code") or "no detail"
+        raise AdapterUnavailable(
+            f"Hunyuan 3D error: {message}",
+            hint="Check the API key, request parameters and the provider quota.",
+            details={"code": error.get("Code")},
+        )
+    if isinstance(error, str) and error:
+        raise AdapterUnavailable(f"Hunyuan 3D error: {error}")
+    # The endpoint also reports application errors as {Type, Code, Msg} inside
+    # a 2xx response.  Successful submit/query bodies carry JobId or Status.
+    code = data.get("Code")
+    kind = data.get("Type")
+    if kind not in (None, 0, "0") or (
+        code not in (None, 0, "0") and not data.get("JobId") and not data.get("Status")
+    ):
+        message = data.get("Msg") or data.get("Message") or "no detail"
+        raise AdapterUnavailable(
+            f"Hunyuan 3D error {code or kind}: {message}",
+            hint="Check the API key, request parameters and the provider quota.",
+            details={"code": code, "type": kind},
+        )
+    return data
+
+
+class HunyuanOpenAICloud:
+    """Hunyuan 3D through Tencent's OpenAI-compatible submit/query endpoints."""
+
+    id = "hunyuan_openai"
+
+    def __init__(
+        self,
+        api_key: str | None,
+        *,
+        base_url: str = "https://api.ai3d.cloud.tencent.com",
+        model: str = "3.0",
+        face_count: int | None = None,
+        timeout_s: float = 120.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        if not api_key or not api_key.strip():
+            raise AdapterUnavailable(
+                "No API key for the Hunyuan OpenAI-compatible provider",
+                hint="Set HUNYUAN3D_API_KEY (or providers.cloud.hunyuan.api_key_env).",
+            )
+        key = api_key.strip()
+        if key.lower().startswith("bearer "):
+            key = key[7:].strip()
+        if face_count is not None and not 3000 <= face_count <= 1_500_000:
+            raise InvalidArgument("Hunyuan FaceCount must be between 3000 and 1500000")
+        self.model = model
+        self.face_count = face_count
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            timeout=timeout_s,
+            transport=transport,
+            headers={"Authorization": key},
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post(path, json=payload)
+        if response.status_code >= 400:
+            raise _http_error("Hunyuan 3D", response)
+        try:
+            return _hunyuan_openai_data(response.json())
+        except ValueError as exc:
+            raise AdapterUnavailable("Hunyuan 3D returned non-JSON output") from exc
+
+    def submit(self, *, prompt: str | None = None, image: bytes | None = None) -> str:
+        payload: dict[str, Any] = {
+            "Model": self.model,
+            "GenerateType": "Normal",
+            "ResultFormat": "STL",
+        }
+        if image is not None:
+            payload["ImageBase64"] = base64.b64encode(image).decode("ascii")
+        elif prompt:
+            payload["Prompt"] = prompt
+        else:
+            raise InvalidArgument("Hunyuan 3D needs a prompt or an image")
+        if self.face_count is not None:
+            payload["FaceCount"] = self.face_count
+        data = self._post("/v1/ai3d/submit", payload)
+        job_id = data.get("JobId") or data.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise AdapterUnavailable("Hunyuan 3D did not return a JobId")
+        return job_id
+
+    def poll(self, task_id: str) -> CloudTask:
+        data = self._post("/v1/ai3d/query", {"JobId": task_id})
+        status_raw = str(data.get("Status") or "WAIT").upper()
+        status = {"WAIT": "queued", "RUN": "running", "DONE": "success", "FAIL": "failed"}.get(
+            status_raw, status_raw.lower()
+        )
+        files = data.get("ResultFile3Ds") or []
+        best: tuple[int, str, str] | None = None
+        preview_url = None
+        preference = {"STL": 0, "GLB": 1, "OBJ": 2, "FBX": 3}
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            if item.get("PreviewImageUrl") and not preview_url:
+                preview_url = item["PreviewImageUrl"]
+            url = item.get("Url")
+            kind = str(item.get("Type") or "").upper()
+            if not url or kind not in preference:
+                continue
+            candidate = (preference[kind], str(url), kind)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+        credits = data.get("ResultCreditConsumed")
+        return CloudTask(
+            task_id=task_id,
+            status=status,
+            progress=100 if status == SUCCESS else 50 if status == "running" else 0,
+            model_url=best[1] if best else None,
+            preview_url=preview_url,
+            error=data.get("ErrorMessage") or data.get("ErrorMsg") or None,
+            credits=float(credits) if isinstance(credits, (int, float)) else None,
+            raw=data,
+        )
+
+
 def build_provider(
     provider_id: str,
     entry: dict[str, Any],
@@ -356,13 +492,29 @@ def build_provider(
 ):
     """Build a cloud adapter from a ``providers.cloud.<id>`` config entry."""
 
-    adapter = str(entry.get("adapter") or provider_id).strip().lower()
+    adapter = str(entry.get("adapter") or provider_id).strip().lower().replace("-", "_")
     timeout_s = float(entry.get("timeout_s") or 120.0)
     if adapter == "tripo":
         return TripoCloud(
             api_key,
             base_url=str(entry.get("base_url") or "https://openapi.tripo3d.com/v3"),
             model=str(entry.get("model") or "v3.1-20260211"),
+            timeout_s=timeout_s,
+            transport=transport,
+        )
+    if adapter == "hunyuan_openai":
+        raw_faces = entry.get("face_count")
+        try:
+            face_count = int(raw_faces) if raw_faces not in (None, "") else None
+        except (TypeError, ValueError) as exc:
+            raise InvalidArgument(
+                f"providers.cloud.{provider_id}.face_count must be an integer"
+            ) from exc
+        return HunyuanOpenAICloud(
+            api_key,
+            base_url=str(entry.get("base_url") or "https://api.ai3d.cloud.tencent.com"),
+            model=str(entry.get("model") or "3.0"),
+            face_count=face_count,
             timeout_s=timeout_s,
             transport=transport,
         )
@@ -377,7 +529,10 @@ def build_provider(
         )
     raise AdapterUnknown(
         f"Unknown cloud adapter: {adapter}",
-        hint="Use adapter tripo or hunyuan in providers.cloud.<id>.",
+        hint=(
+            "Use adapter tripo, hunyuan_openai (API key) or hunyuan "
+            "(Tencent Cloud TC3 signature) in providers.cloud.<id>."
+        ),
         details={"provider": provider_id},
     )
 
@@ -422,12 +577,12 @@ def _model_suffix(url: str, content_type: str) -> str:
 
 
 def to_stl(data: bytes, suffix: str, *, scale: float = 1.0) -> bytes:
-    """Convert a provider mesh to binary STL (no-op for STL input)."""
+    """Convert a provider mesh to binary STL, applying ``scale`` in all cases."""
 
     suffix = suffix.lower()
     if scale <= 0:
         raise InvalidArgument("scale must be positive")
-    if suffix == ".stl":
+    if suffix == ".stl" and scale == 1.0:
         return data
     try:
         import trimesh

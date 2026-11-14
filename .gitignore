@@ -3,6 +3,8 @@ secrets.json
 *.local.json
 .env
 .env.*
+# provider consoles hand out keys as .txt; ignore every one of them, no exceptions
+*.txt
 
 # python
 __pycache__/

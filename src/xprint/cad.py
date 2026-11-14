@@ -72,9 +72,9 @@ class RunResult:
         if self.timed_out:
             data["timed_out"] = True
         if self.stdout.strip():
-            data["stdout_tail"] = _tail(self.stdout, max_output_chars)
+            data["stdout_tail"] = tail(self.stdout, max_output_chars)
         if self.stderr.strip():
-            data["stderr_tail"] = _tail(self.stderr, max_output_chars)
+            data["stderr_tail"] = tail(self.stderr, max_output_chars)
         if not self.ok:
             data["hint"] = self.hint or (
                 "Fix the script and call write_script again, then run_cad."
@@ -82,7 +82,7 @@ class RunResult:
         return data
 
 
-def _tail(text: str, limit: int) -> str:
+def tail(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text.strip()
     return "…" + text[-limit:].strip()
@@ -111,12 +111,12 @@ def clean_env(extra_deny: tuple[str, ...] = ()) -> dict[str, str]:
     return env
 
 
-def _kill(process: subprocess.Popen[str]) -> None:
+def kill_group(process: subprocess.Popen[str]) -> None:
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
 
 
-def _read_result(path: Path) -> dict[str, Any] | None:
+def read_result(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -128,6 +128,7 @@ def run_script(
     script: str | os.PathLike[str],
     *,
     workdir: str | os.PathLike[str] | None = None,
+    input_step: str | os.PathLike[str] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     python: str | None = None,
     max_output_chars: int = MAX_OUTPUT_CHARS,
@@ -136,6 +137,9 @@ def run_script(
 
     ``python`` selects the CAD interpreter (defaults to the one running XPrint);
     set ``config.cad.python`` when ``build123d`` lives in another venv.
+    ``input_step`` is an existing STEP file the script may import; the worker
+    exposes it to the script as the string globals ``INPUT_STEP`` and
+    ``INPUT_NAME`` (empty strings when no file was passed).
     """
 
     script_path = Path(script).expanduser().resolve()
@@ -146,6 +150,12 @@ def run_script(
         )
     if timeout_s <= 0:
         raise InvalidArgument("timeout_s must be positive")
+    input_path = Path(input_step).expanduser().resolve() if input_step else None
+    if input_path is not None and not input_path.is_file():
+        raise NotFound(
+            f"input STEP not found: {input_step}",
+            hint="Copy the file into the workspace, or pass an absolute path.",
+        )
 
     outdir = Path(workdir).expanduser().resolve() if workdir else script_path.parent
     outdir.mkdir(parents=True, exist_ok=True)
@@ -163,6 +173,8 @@ def run_script(
         "--cpu-seconds",
         str(int(timeout_s) + 5),
     ]
+    if input_path is not None:
+        command += ["--input", str(input_path)]
 
     started = time.monotonic()
     timed_out = False
@@ -191,13 +203,13 @@ def run_script(
         stdout, stderr = process.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill(process)
+        kill_group(process)
         stdout, stderr = process.communicate()
     duration = time.monotonic() - started
 
-    stdout = _tail(stdout or "", max_output_chars)
-    stderr = _tail(stderr or "", max_output_chars)
-    payload = _read_result(result_path)
+    stdout = tail(stdout or "", max_output_chars)
+    stderr = tail(stderr or "", max_output_chars)
+    payload = read_result(result_path)
 
     if timed_out:
         return RunResult(
@@ -243,4 +255,12 @@ def run_script(
     )
 
 
-__all__ = ["DEFAULT_TIMEOUT_S", "RunResult", "clean_env", "run_script"]
+__all__ = [
+    "DEFAULT_TIMEOUT_S",
+    "RunResult",
+    "clean_env",
+    "kill_group",
+    "read_result",
+    "run_script",
+    "tail",
+]

@@ -2,11 +2,14 @@
 
 This file is executed as a plain script (not imported) by :mod:`xprint.cad`::
 
-    python -I -B cad_worker.py model.py /path/to/workdir
+    python -I -B cad_worker.py model.py /path/to/workdir [--input part.step]
 
 It imports the user's script, calls ``build_part()``, writes ``model.stl`` and
 ``model.step`` into the work directory, and drops ``result.json`` there for the
-parent process.  Keeping it dependency-light on purpose: the worker must run in
+parent process.  An optional ``--input`` STEP file is exposed to the script as
+the string globals ``INPUT_STEP`` (absolute path) and ``INPUT_NAME``
+(basename); they are plain strings so the script cannot walk the filesystem
+with them, and ``open`` is already banned by the script policy.  Keeping it dependency-light on purpose: the worker must run in
 whatever interpreter has ``build123d`` installed, which is not necessarily the
 interpreter running the MCP server.
 """
@@ -27,11 +30,14 @@ TRACE_LIMIT = 4000
 MAX_STL_TRIANGLES = 400_000
 
 
-def _load_module(path: Path) -> Any:
+def _load_module(path: Path, input_step: Path | None = None) -> Any:
     spec = importlib.util.spec_from_file_location("xprint_user_model", path)
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
+    # Set the globals before executing the script so module-level code sees them.
+    module.__dict__["INPUT_STEP"] = str(input_step) if input_step else ""
+    module.__dict__["INPUT_NAME"] = input_step.name if input_step else ""
     sys.modules["xprint_user_model"] = module
     spec.loader.exec_module(module)
     return module
@@ -124,17 +130,18 @@ def _measure(part: Any) -> dict[str, Any]:
     return checks
 
 
-def _run(script: Path, outdir: Path) -> dict[str, Any]:
+def _run(script: Path, outdir: Path, input_step: Path | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "ok": False,
         "checks": {},
         "artifacts": {},
         "error": None,
         "script": str(script),
+        "input": str(input_step) if input_step else "",
     }
     sys.path.insert(0, str(script.parent))
     try:
-        module = _load_module(script)
+        module = _load_module(script, input_step)
         build_part = getattr(module, "build_part", None)
         if not callable(build_part):
             raise RuntimeError("model.py must define build_part()")
@@ -192,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("script")
     parser.add_argument("outdir")
     parser.add_argument("--cpu-seconds", type=int, default=0)
+    parser.add_argument("--input", default="", help="STEP file exposed as INPUT_STEP")
     args = parser.parse_args(argv)
 
     if args.cpu_seconds > 0:
@@ -200,8 +208,15 @@ def main(argv: list[str] | None = None) -> int:
     script = Path(args.script).resolve()
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
+    input_step = Path(args.input).resolve() if args.input else None
+    if input_step is not None and not input_step.is_file():
+        (outdir / "result.json").write_text(
+            json.dumps({"ok": False, "error": f"input STEP not found: {input_step}"}),
+            encoding="utf-8",
+        )
+        return 1
 
-    result = _run(script, outdir)
+    result = _run(script, outdir, input_step)
     (outdir / "result.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",

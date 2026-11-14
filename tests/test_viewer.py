@@ -9,7 +9,13 @@ import pytest
 from tests.stl_helpers import TETRA, write_stl
 
 from xprint.assets import AssetStore
-from xprint.viewer import MAX_VIEW_TRIANGLES, VIEWER_FILE, viewer_html, write_viewer
+from xprint.viewer import (
+    MAX_VIEW_TRIANGLES,
+    VIEWER_FILE,
+    viewer_alias_name,
+    viewer_html,
+    write_viewer,
+)
 
 
 def _triangles():
@@ -94,7 +100,7 @@ def test_viewer_tool_requires_a_build_and_the_exact_confirm(workspace, tmp_path)
     assert payload["writes_performed"] is True
     assert payload["revision"] == "v001"
     assert payload["triangles"] == 4
-    assert payload["viewer_path"].endswith(f"{asset_id}/{VIEWER_FILE}")
+    assert payload["viewer_path"].endswith(f"{asset_id}/cube-viewer.html")
     assert payload["viewer_revision"] == "v001"
     assert payload["viewer_revisions"] == 1
     html = (workspace.root / payload["viewer_path"]).read_text(encoding="utf-8")
@@ -143,9 +149,17 @@ def test_collection_viewer_embeds_every_revision_in_one_file(tmp_path) -> None:
     target = tmp_path / "asset" / "viewer.html"
     assert written["path"] == target
     assert target.is_file()
+    assert written["alias_path"].name == "plate-viewer.html"
+    assert written["alias_path"].read_text(encoding="utf-8") == target.read_text(encoding="utf-8")
     body = target.read_text(encoding="utf-8")
     assert '"revision": "v002"' in body
     assert '"stl": "v002/model.stl"' in body
+
+
+def test_viewer_alias_name_is_readable_and_safe() -> None:
+    assert viewer_alias_name("TourBox Neo") == "TourBox-Neo-viewer.html"
+    assert viewer_alias_name("产品 模型/01") == "产品-模型-01-viewer.html"
+    assert viewer_alias_name("") == "model-viewer.html"
 
 
 def test_legacy_per_revision_viewer_redirects_to_the_asset_viewer(tmp_path) -> None:

@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from . import __version__
-from .assets import AssetStore, validate_asset_id, validate_name
+from .assets import INPUT_STEP, AssetStore, validate_asset_id, validate_name
 from .blender import run_blender
 from .blender_policy import check_blender_script
 from .cad import run_script
@@ -38,6 +38,8 @@ from .config import (
     remove_printer,
     save_printer,
 )
+from .drawing import DEFAULT_VIEWS as DRAWING_VIEWS
+from .drawing import run_drawing
 from .errors import (
     AdapterUnavailable,
     ConfigError,
@@ -52,6 +54,7 @@ from .jobs import Job, JobStore, sha256_file
 from .local_mesh import DEFAULT_TIMEOUT_S as LOCAL_GENERATION_TIMEOUT
 from .local_mesh import run_local
 from .mesh import stats_for_stl
+from .mesh_fit import DEFAULT_MAX_TRIANGLES, SUPPORTED_SUFFIXES, fit_script, target_spec
 from .preview import DEFAULT_VIEWS, render_views
 from .printability import (
     THIN_WALL_MM,
@@ -86,7 +89,12 @@ from .slicers import (
     slice_stl,
     validate_slice_id,
 )
-from .viewer import entry_from_stl, write_collection_viewer, write_legacy_redirect
+from .viewer import (
+    entry_from_stl,
+    viewer_alias_path,
+    write_collection_viewer,
+    write_legacy_redirect,
+)
 from .workspace import Workspace, atomic_write_bytes
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -502,9 +510,10 @@ def _asset_viewer(
                 write_legacy_redirect(legacy_dir, title=name or asset_id)
             except OSError:
                 continue
+    viewer_file = info.get("alias_path") or info["path"]
     return {
-        "viewer_path": rt.workspace.rel(info["path"]),
-        "viewer_file": str(info["path"]),
+        "viewer_path": rt.workspace.rel(viewer_file),
+        "viewer_file": str(viewer_file),
         "viewer_revision": selected or entries[-1]["revision"],
         "viewer_revisions": len(entries),
         "viewer_triangles": info["triangles"],
@@ -831,13 +840,22 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "attach the result to that revision. Returns real geometry checks "
             "(watertight, boundary/non-manifold edges, bbox, volume) and stores "
             "model.stl/model.step plus a self-contained interactive viewer.html. "
-            "This is the feedback step of the closed loop: read the checks, fix the "
-            "script, call model_write again, and call `present` with viewer_file so "
-            "the user can open the 3D preview. WRITES files: confirm must be exactly "
-            "'BUILD <asset_id>'."
+            "Pass `input` with a .step/.stp path to import an existing part: the "
+            "file is copied into the revision as input.step and its absolute path "
+            "is exposed to the script as the module global INPUT_STEP, so a script "
+            "can do `part = import_step(INPUT_STEP)` and edit or re-validate it "
+            "without redrawing geometry. This is the feedback step of the closed "
+            "loop: read the checks, fix the script, call model_write again, and call "
+            "`present` with viewer_file so the user can open the 3D preview. WRITES "
+            "files: confirm must be exactly 'BUILD <asset_id>'."
         ),
     )
-    def model_build(asset_id: str, confirm: str, revision: str = "") -> dict[str, Any]:
+    def model_build(
+        asset_id: str,
+        confirm: str,
+        revision: str = "",
+        input: str = "",
+    ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
             expected = f"BUILD {asset_id}"
@@ -867,6 +885,12 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     details={"issues": checks["errors"]},
                 )
 
+            input_record: dict[str, Any] = {}
+            input_step: Path | None = None
+            if input:
+                input_record = assets.store_input(asset_id, target, input)
+                input_step = assets.revision_dir(asset_id, target) / INPUT_STEP
+
             cad = rt.loaded.config.cad
             workdir = rt.workspace.safe_path(
                 f"cache/builds/{asset_id}_{target}_{secrets.token_hex(4)}",
@@ -875,6 +899,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             result = run_script(
                 script_path,
                 workdir=workdir,
+                input_step=input_step,
                 timeout_s=cad.timeout_s,
                 python=cad.python,
             )
@@ -884,10 +909,14 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 path = Path(value)
                 if path.is_file():
                     stored[f"model{path.suffix or '.stl'}"] = path
+            build = result.to_dict()
+            if input_record:
+                build["input"] = input_record
+                rt.record_write(f"assets/{asset_id}/{target}/{INPUT_STEP}")
             record = assets.record_build(
                 asset_id,
                 target,
-                build=result.to_dict(),
+                build=build,
                 artifacts=stored,
             )
             rt.record_write(f"assets/{asset_id}/{target}/model.stl")
@@ -900,11 +929,17 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "Review the checks, open viewer_file for an interactive look, then slice. "
                 "If a check failed, fix the script and call model_write followed by model_build."
             )
+            if input_record:
+                hint = (
+                    "STEP input stored as input.step; the script reads it through the "
+                    "INPUT_STEP global. " + hint
+                )
             if not result.ok:
                 hint = (
                     "Build failed; read error/stderr_tail above, fix model.py and "
                     "call model_write, then model_build again."
                 )
+            stored_input = assets.stored_input(asset_id, target)
             return {
                 "ok": result.ok,
                 "writes_performed": True,
@@ -915,11 +950,127 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "timed_out": result.timed_out,
                 "checks": result.checks,
                 "artifacts": sorted(record["artifacts"]),
+                **({"input": stored_input} if stored_input else {}),
                 "error": result.error,
                 "stdout_tail": result.stdout[-2000:],
                 "stderr_tail": result.stderr[-2000:],
                 **viewer,
                 "hint": hint,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="model_drawing",
+        description=(
+            "Project a built revision's model.step into an engineering drawing: one "
+            "sheet with "
+            + ", ".join(DRAWING_VIEWS)
+            + " views laid out third-angle, dashed hidden lines (orthographic views) and "
+            "view labels, "
+            "written as drawing.svg and drawing.dxf inside the revision. Use it "
+            "after model_build when a printed sheet is wanted, or to hand the part "
+            "to someone without a slicer. Returns the sheet size and per-view edge "
+            "counts; export the files with asset_export(artifact='svg' or 'dxf'). "
+            "WRITES files: confirm must be exactly 'DRAWING <asset_id>'."
+        ),
+    )
+    def model_drawing(
+        asset_id: str,
+        confirm: str,
+        revision: str = "",
+        views: str = "",
+        scale: float = 1.0,
+        hidden: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            validate_asset_id(asset_id)
+            expected = f"DRAWING {asset_id}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            assets = AssetStore(rt.workspace)
+            manifest = assets.load(asset_id)
+            target = revision or assets.latest_revision(manifest)
+            if not target:
+                raise InvalidArgument(
+                    f"Asset {asset_id} has no revisions",
+                    hint="Call model_write first.",
+                )
+            record = next(
+                (item for item in manifest.get("revisions", []) if item.get("revision") == target),
+                {},
+            )
+            if "model.step" not in (record.get("artifacts") or {}):
+                raise NotFound(
+                    f"Revision {target} has no STEP artifact to draw",
+                    hint=(
+                        f"Call model_build with asset_id {asset_id!r} first; "
+                        "drawings are projected from model.step."
+                    ),
+                )
+            step_path = assets.revision_dir(asset_id, target) / "model.step"
+            cad = rt.loaded.config.cad
+            workdir = rt.workspace.safe_path(
+                f"cache/drawings/{asset_id}_{target}_{secrets.token_hex(4)}",
+                create_parents=True,
+            )
+            result = run_drawing(
+                step_path,
+                workdir=workdir,
+                views=views,
+                scale=scale,
+                hidden=hidden,
+                timeout_s=cad.timeout_s,
+                python=cad.python,
+            )
+            if not result.ok:
+                return {
+                    "ok": False,
+                    "writes_performed": False,
+                    "asset_id": asset_id,
+                    "revision": target,
+                    "error": result.error,
+                    "timed_out": result.timed_out,
+                    "stdout_tail": result.stdout[-2000:],
+                    "stderr_tail": result.stderr[-2000:],
+                    "hint": result.hint
+                    or "Fix the geometry, rebuild, then call model_drawing again.",
+                }
+            files = {key: Path(value) for key, value in result.files.items()}
+            record_out = assets.record_output(
+                asset_id,
+                target,
+                key="drawing",
+                meta={
+                    "views": [item["name"] for item in (result.checks.get("views") or [])],
+                    "scale": result.checks.get("scale"),
+                    "hidden": result.checks.get("hidden"),
+                    "sheet_mm": result.checks.get("sheet_mm"),
+                    "warnings": result.warnings,
+                },
+                files=files,
+            )
+            for name in sorted(files):
+                rt.record_write(f"assets/{asset_id}/{target}/{name}")
+            drawing = record_out.get("drawing") or {}
+            return {
+                "ok": True,
+                "writes_performed": True,
+                "asset_id": asset_id,
+                "revision": target,
+                "duration_s": round(result.duration_s, 2),
+                "sheet_mm": result.checks.get("sheet_mm"),
+                "views": result.checks.get("views"),
+                "edges": result.checks.get("edges"),
+                "files": sorted(drawing.get("files") or {}),
+                "warnings": result.warnings,
+                "hint": (
+                    "Open drawing.svg in a browser or drawing.dxf in a CAD tool; "
+                    "copy them out with asset_export(artifact='svg') or ('dxf')."
+                ),
             }
         except XPrintError as exc:
             return tool_error(exc)
@@ -1024,7 +1175,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Rendered model, revision {target} (views: {', '.join(wanted)}):",
                 )
             )
-            viewer_file = assets.asset_dir(asset_id) / "viewer.html"
+            viewer_file = viewer_alias_path(
+                assets.asset_dir(asset_id),
+                name=str(manifest.get("name") or ""),
+                asset_id=asset_id,
+            )
             payload = {
                 "ok": True,
                 "writes_performed": False,
@@ -1105,7 +1260,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "viewer_file": viewer["viewer_file"],
                 "viewer_revision": viewer["viewer_revision"],
                 "viewer_revisions": viewer["viewer_revisions"],
-                "file": "viewer.html",
+                "file": Path(viewer["viewer_file"]).name,
                 "triangles": viewer["viewer_triangles"],
                 "bytes": viewer["viewer_bytes"],
                 "hint": (
@@ -1257,15 +1412,222 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             return tool_error(exc)
 
     @server.tool(
+        name="mesh_fit",
+        description=(
+            "Fit an existing STL/GLB/OBJ mesh to a real millimetre size and turn "
+            "it into a versioned XPrint asset. This is the finishing step for "
+            "image-to-3D: keep the generated shape, repair it, scale it, seat it on "
+            "z=0, centre it, decimate to a preview-friendly triangle budget, then "
+            "export STL/GLB and a named viewer. Sizing is explicit: pass "
+            "size_mm=[x,y,z] for an exact envelope (non-uniform scale), or "
+            "max_dimension_mm=<longest side> to scale uniformly and preserve the "
+            "image proportions. Pass source= for a file path, or asset_id= (plus "
+            "optional revision=) to use an asset's stored model.stl. WRITES files "
+            "and runs Blender: confirm must be exactly 'FIT <name>'."
+        ),
+    )
+    def mesh_fit(
+        name: str,
+        confirm: str,
+        size_mm: list[float] | None = None,
+        max_dimension_mm: float = 0.0,
+        source: str = "",
+        asset_id: str = "",
+        revision: str = "",
+        max_triangles: int = DEFAULT_MAX_TRIANGLES,
+        image: str = "",
+        blender_path: str = "",
+        timeout_s: int = 0,
+    ) -> dict[str, Any]:
+        try:
+            name = validate_name(name)
+            expected = f"FIT {name}"
+            if confirm != expected:
+                raise ConfirmationMismatch(
+                    f"confirm must be exactly {expected!r}",
+                    details={"expected": expected},
+                )
+            if bool(source) == bool(asset_id):
+                raise InvalidArgument(
+                    "Pass exactly one of source= or asset_id=",
+                    hint="source= is a STL/GLB/OBJ path; asset_id= fits a stored asset revision.",
+                )
+            try:
+                exact, uniform = target_spec(size_mm, max_dimension_mm)
+            except ValueError as exc:
+                raise InvalidArgument(
+                    str(exc),
+                    hint="Use size_mm=[x,y,z] for an exact envelope, or max_dimension_mm for uniform scaling.",
+                ) from None
+            if not 1_000 <= int(max_triangles) <= 400_000:
+                raise InvalidArgument(
+                    "max_triangles must be between 1000 and 400000",
+                    details={"max_triangles": max_triangles},
+                )
+
+            assets = AssetStore(rt.workspace)
+            origin: dict[str, Any]
+            if asset_id:
+                source_asset = assets.load(validate_asset_id(asset_id))
+                chosen = revision or assets.latest_revision(source_asset)
+                known = {item.get("revision") for item in source_asset.get("revisions", [])}
+                if not chosen or chosen not in known:
+                    raise NotFound(
+                        f"Revision {revision!r} not found on {source_asset['asset_id']}",
+                        details={"available": sorted(v for v in known if v)},
+                    )
+                source_path = assets.revision_dir(source_asset["asset_id"], chosen) / "model.stl"
+                if not source_path.is_file():
+                    raise NotFound(
+                        f"Stored model.stl not found for {source_asset['asset_id']} {chosen}",
+                        hint="Fit the source file directly with source= instead.",
+                    )
+                origin = {
+                    "asset_id": source_asset["asset_id"],
+                    "revision": chosen,
+                    "name": source_asset.get("name", ""),
+                }
+            else:
+                source_path = Path(source).expanduser().resolve()
+                if not source_path.is_file():
+                    raise NotFound(
+                        f"Mesh not found: {source_path}",
+                        hint="Pass an existing .stl, .glb, .gltf or .obj file.",
+                    )
+                if source_path.suffix.lower() not in SUPPORTED_SUFFIXES:
+                    raise InvalidArgument(
+                        f"Unsupported mesh format: {source_path.suffix or '(none)'}",
+                        hint="Supported: " + ", ".join(sorted(SUPPORTED_SUFFIXES)),
+                    )
+                origin = {"path": str(source_path)}
+
+            script = fit_script(
+                source_path,
+                exact,
+                int(max_triangles),
+                max_dimension_mm=uniform,
+            )
+            issues = check_blender_script(script)
+            errors = [issue.as_dict() for issue in issues if issue.severity == "error"]
+            if errors:
+                raise InvalidArgument(
+                    "The generated fit script failed safety checks; nothing was executed",
+                    details={"issues": errors},
+                )
+
+            image_path: Path | None = None
+            if image:
+                image_path = Path(image).expanduser().resolve()
+                if not image_path.is_file():
+                    raise NotFound(
+                        f"Image not found: {image_path}",
+                        hint="Pass a PNG/JPEG/WebP path or omit image=.",
+                    )
+                if not sniff_image_mime(image_path.read_bytes()):
+                    raise InvalidArgument(
+                        f"Not a PNG/JPEG/WebP image: {image_path.name}",
+                        hint="Convert the reference to PNG or JPEG first.",
+                    )
+
+            manifest = assets.create(name, kind="blender")
+            record = assets.add_revision(
+                manifest["asset_id"],
+                script,
+                prompt=(
+                    f"Fit {source_path.name} to "
+                    + (
+                        f"{exact[0]:g} × {exact[1]:g} × {exact[2]:g} mm"
+                        if exact
+                        else f"a {uniform:g} mm longest side (uniform)"
+                    )
+                    + f" with at most {int(max_triangles)} triangles"
+                ),
+                model="mesh_fit",
+                modeler="mesh_fit",
+                checks={"policy": summarise(issues)},
+                reference=image_path,
+                reference_meta={"source_path": str(image_path)} if image_path else None,
+                kind="blender",
+            )
+            revision = record["revision"]
+            render_config = rt.loaded.config.render
+            workdir = rt.workspace.safe_path(
+                f"cache/mesh_fit/{manifest['asset_id']}_{revision}_{secrets.token_hex(4)}",
+                create_parents=True,
+            )
+            result = run_blender(
+                script,
+                workdir=workdir,
+                image=image_path,
+                blender_path=blender_path or render_config.blender_path,
+                timeout_s=float(timeout_s or render_config.timeout_s),
+            )
+
+            stored: dict[str, Path] = {}
+            for stored_name, value in result.artifacts.items():
+                path = Path(value)
+                if path.is_file():
+                    stored[Path(stored_name).name] = path
+            if stored:
+                assets.record_build(
+                    manifest["asset_id"],
+                    revision,
+                    build=result.to_dict(),
+                    artifacts=stored,
+                )
+                rt.record_write(f"assets/{manifest['asset_id']}/{revision}/model.stl")
+
+            viewer: dict[str, Any] = {}
+            if result.ok:
+                viewer = _asset_viewer(
+                    rt,
+                    assets,
+                    assets.load(manifest["asset_id"]),
+                    selected=revision,
+                )
+
+            hint = (
+                "Open viewer_file to inspect the fitted mesh, then call model_preview "
+                "or printability_check."
+                if result.ok
+                else "Read stderr_tail, check the source mesh, then call mesh_fit again."
+            )
+            return {
+                "ok": result.ok,
+                "writes_performed": True,
+                "asset_id": manifest["asset_id"],
+                "revision": revision,
+                "engine": "blender",
+                "source": origin,
+                "requested_size_mm": list(exact) if exact else None,
+                "max_dimension_mm": uniform or None,
+                "max_triangles": int(max_triangles),
+                "exit_code": result.exit_code,
+                "duration_s": round(result.duration_s, 2),
+                "timed_out": result.timed_out,
+                "checks": result.checks,
+                "artifacts": sorted(stored),
+                "error": result.error,
+                "stdout_tail": result.stdout[-1500:],
+                "stderr_tail": result.stderr[-1500:],
+                **viewer,
+                "hint": hint,
+            }
+        except XPrintError as exc:
+            return tool_error(exc)
+
+    @server.tool(
         name="generate_cloud",
         description=(
-            "Generate a 3D model with a cloud provider (tripo or hunyuan) in the "
-            "background. Configure it in providers.cloud.<id> (adapter, key env, "
-            "scale, timeout). XPrint submits the task, polls it, downloads the "
-            "result, converts it to STL, records real geometry checks and stores "
-            "a versioned asset. Returns a job_id: poll job_status until succeeded, "
-            "then call model_preview. WRITES files and spends provider credits: "
-            "confirm must be exactly 'CLOUD <name>'."
+            "Generate a 3D model with a cloud provider (tripo, hunyuan_openai or "
+            "hunyuan TC3) in the background. Configure it in providers.cloud.<id> "
+            "(adapter, key env, scale, timeout). XPrint submits the task, polls it, "
+            "downloads the result, converts it to STL, records real geometry checks "
+            "and stores a versioned asset. Pass optional size_mm=[x,y,z] or "
+            "max_dimension_mm=<longest side> to run the same mesh fit after "
+            "generation; the raw mesh is kept as source.stl. Returns a job_id: poll "
+            "job_status until succeeded, then call model_preview. WRITES files and "
+            "spends provider credits: confirm must be exactly 'CLOUD <name>'."
         ),
     )
     def generate_cloud(
@@ -1275,6 +1637,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         prompt: str = "",
         image: str = "",
         timeout_s: int = 0,
+        size_mm: list[float] | None = None,
+        max_dimension_mm: float = 0.0,
+        max_triangles: int = DEFAULT_MAX_TRIANGLES,
     ) -> dict[str, Any]:
         try:
             name = validate_name(name)
@@ -1289,6 +1654,23 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "Provide prompt, image, or both",
                     hint="Cloud providers accept a text prompt, a reference image, or both.",
                 )
+            try:
+                exact, uniform = (
+                    target_spec(size_mm, max_dimension_mm)
+                    if (size_mm or max_dimension_mm)
+                    else (None, 0.0)
+                )
+            except ValueError as exc:
+                raise InvalidArgument(
+                    str(exc),
+                    hint="Use size_mm=[x,y,z] for an exact envelope, or max_dimension_mm for uniform scaling.",
+                ) from None
+            if not 1_000 <= int(max_triangles) <= 400_000:
+                raise InvalidArgument(
+                    "max_triangles must be between 1000 and 400000",
+                    details={"max_triangles": max_triangles},
+                )
+            fit_requested = bool(exact or uniform)
 
             entry = rt.loaded.config.providers.cloud.get(provider)
             if entry is None:
@@ -1302,7 +1684,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"Cloud provider {provider!r} is disabled",
                     hint="Set providers.cloud.<id>.enabled to true.",
                 )
-            adapter = str(entry.get("adapter") or provider).lower()
+            adapter = str(entry.get("adapter") or provider).strip().lower().replace("-", "_")
 
             image_path: Path | None = None
             if image:
@@ -1332,6 +1714,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "No Tripo API key",
                     hint=f"Set {entry.get('api_key_env') or 'TRIPO_API_KEY'}.",
                 )
+            if adapter == "hunyuan_openai" and not api_key:
+                raise AdapterUnavailable(
+                    "No API key for the Hunyuan OpenAI-compatible provider",
+                    hint=f"Set {entry.get('api_key_env') or 'HUNYUAN3D_API_KEY'}.",
+                )
             if adapter == "hunyuan" and not (secret_id and secret_key):
                 raise AdapterUnavailable(
                     "No Tencent Cloud credentials for Hunyuan 3D",
@@ -1342,7 +1729,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             if scale <= 0:
                 raise ConfigError(
                     f"providers.cloud.{provider}.scale must be positive",
-                    hint="Tripo GLB output is in meters: use 1000 for millimeters.",
+                    hint=(
+                        "Cloud meshes often use metres: use 1000 for millimetres, "
+                        "then set a smaller value if the generated model is oversized."
+                    ),
                 )
             budget = float(timeout_s or entry.get("timeout_s") or 600)
             poll_interval = float(entry.get("poll_interval_s") or 3.0)
@@ -1401,9 +1791,48 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         atomic_write_bytes(original, raw, mode=0o644)
                         artifacts[f"model{suffix}"] = original
 
+                    fit_info: dict[str, Any] = {}
+                    if fit_requested:
+                        raw_stl = staging / "source.stl"
+                        shutil.copyfile(stl_path, raw_stl)
+                        raw_bytes = stl_path.stat().st_size
+                        fit_dir = staging / "fit"
+                        fit_dir.mkdir(parents=True, exist_ok=True)
+                        fit_result = run_blender(
+                            fit_script(
+                                stl_path,
+                                exact,
+                                int(max_triangles),
+                                max_dimension_mm=uniform,
+                            ),
+                            workdir=fit_dir,
+                            image=image_path,
+                            blender_path=rt.loaded.config.render.blender_path,
+                            timeout_s=float(rt.loaded.config.render.timeout_s),
+                        )
+                        fitted = fit_result.artifacts.get("model.stl")
+                        if not fit_result.ok or not fitted or not Path(fitted).is_file():
+                            raise AdapterUnavailable(
+                                f"{provider} generated a mesh, but the size fit failed",
+                                hint="The raw mesh is retained in the job cache; retry with mesh_fit.",
+                                details={"stderr_tail": fit_result.stderr[-1200:]},
+                            )
+                        shutil.copyfile(fitted, stl_path)
+                        artifacts["source.stl"] = raw_stl
+                        fit_info = {
+                            "mode": "uniform" if uniform else "exact",
+                            "requested_size_mm": list(exact) if exact else None,
+                            "max_dimension_mm": uniform or None,
+                            "max_triangles": int(max_triangles),
+                            "source_bytes": raw_bytes,
+                            "checks": fit_result.checks,
+                        }
+
                     checks = stats_for_stl(stl_path)
                     checks["engine"] = f"cloud:{provider}"
                     checks["provider_task"] = task_id
+                    if fit_info:
+                        checks["fit"] = fit_info
                     assets = AssetStore(rt.workspace)
                     manifest = assets.create(name, kind="cloud")
                     record = assets.add_revision(
@@ -1441,6 +1870,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "task_id": task_id,
                         "checks": checks,
                         "artifacts": sorted(record.get("artifacts", {})),
+                        "fit": fit_info or None,
                         **viewer,
                     }
                 finally:
@@ -1450,7 +1880,12 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             job = runner.submit(
                 "cloud.generate",
                 work,
-                params={"provider": provider, "name": name, "mode": mode},
+                params={
+                    "provider": provider,
+                    "name": name,
+                    "mode": mode,
+                    "fit": fit_requested,
+                },
                 provider=provider,
             )
             return {
@@ -1460,6 +1895,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "provider": provider,
                 "adapter": adapter,
                 "mode": mode,
+                "fit_requested": fit_requested,
                 "timeout_s": budget,
                 "hint": "Poll job_status(job_id); on success open result.viewer_file or call model_preview(asset_id).",
             }
@@ -2662,9 +3098,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         name="asset_export",
         description=(
             "Copy a built artifact out of the workspace to a path the user can open "
-            "(for example ~/Desktop/bracket.stl). artifact is 'stl', 'step' or "
-            "'script'. Defaults to the workspace exports/ directory. WRITES the "
-            "destination file: confirm must be exactly 'EXPORT <asset_id>'."
+            "(for example ~/Desktop/bracket.stl). artifact is 'stl', 'step', "
+            "'script', 'svg' or 'dxf' (the last two come from model_drawing). "
+            "Defaults to the workspace exports/ directory. WRITES the destination "
+            "file: confirm must be exactly 'EXPORT <asset_id>'."
         ),
     )
     def asset_export(
@@ -2706,9 +3143,18 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     )
                 source = directory / stored
                 suffix = f".{artifact}"
+            elif artifact in {"svg", "dxf"}:
+                stored = f"drawing.{artifact}"
+                if stored not in ((record.get("drawing") or {}).get("files") or {}):
+                    raise NotFound(
+                        f"Revision {target} has no {stored}",
+                        hint=f"Call model_drawing with asset_id {asset_id!r} first.",
+                    )
+                source = directory / stored
+                suffix = f".{artifact}"
             else:
                 raise InvalidArgument(
-                    "artifact must be 'stl', 'step' or 'script'",
+                    "artifact must be 'stl', 'step', 'script', 'svg' or 'dxf'",
                     details={"artifact": artifact},
                 )
             if not source.is_file():
@@ -2730,7 +3176,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "path": str(destination),
                 "bytes": destination.stat().st_size,
                 "sha256": sha256_file(destination),
-                "hint": "Open the file in a slicer, or import it into the printer's web UI.",
+                "hint": (
+                    "Open the sheet in a browser (svg) or a CAD/drawing tool (dxf)."
+                    if artifact in {"svg", "dxf"}
+                    else "Open the file in a slicer, or import it into the printer's web UI."
+                ),
             }
         except XPrintError as exc:
             return tool_error(exc)
@@ -2739,7 +3189,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         name="model_show",
         description=(
             "Return one asset's manifest, its revision history (prompt, model, "
-            "geometry summary, viewer availability) and the source of a stored "
+            "geometry summary, STEP input, drawing files, viewer availability) and "
+            "the source of a stored "
             "revision (latest by default), so a client model can read, explain, "
             "compare or repair it. Read-only."
         ),
@@ -2757,7 +3208,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 params_path = assets.revision_dir(asset_id, target) / "params.json"
                 if params_path.is_file():
                     params = json.loads(params_path.read_text(encoding="utf-8"))
-            viewer_path = assets.asset_dir(asset_id) / "viewer.html"
+            viewer_path = viewer_alias_path(
+                assets.asset_dir(asset_id),
+                name=str(manifest.get("name") or ""),
+                asset_id=asset_id,
+            )
             viewer_rel = rt.workspace.rel(viewer_path) if viewer_path.is_file() else None
             return {
                 "ok": True,
@@ -2781,6 +3236,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                             "volume_cm3"
                         ),
                         "artifacts": sorted(item.get("artifacts", {})),
+                        "drawing": sorted((item.get("drawing") or {}).get("files") or {}),
+                        "input": (item.get("build") or {}).get("input"),
                         "reference": (item.get("reference") or {}).get("file"),
                         "prompt": item.get("prompt"),
                         "model": item.get("model"),

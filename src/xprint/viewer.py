@@ -9,7 +9,11 @@ the MCP tools.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
+import os
+import re
+import shutil
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -21,6 +25,47 @@ from .preview import load_stl
 MAX_VIEW_TRIANGLES = 400_000
 VIEWER_FILE = "viewer.html"
 _TEMPLATE = Path(__file__).with_name("viewer_template.html").read_text(encoding="utf-8")
+
+
+def viewer_alias_name(name: str, asset_id: str = "") -> str:
+    """Return a human-readable viewer filename derived from the model name."""
+
+    raw = (name or asset_id or "model").strip()
+    stem = re.sub(r"[^\w.-]+", "-", raw, flags=re.UNICODE).strip("-._")
+    stem = stem[:60].strip("-._") or "model"
+    alias = f"{stem}-viewer.html"
+    return VIEWER_FILE if alias == VIEWER_FILE else alias
+
+
+def link_viewer_alias(directory: str | Path, *, name: str, asset_id: str = "") -> Path:
+    """Expose ``viewer.html`` under a model-specific name for browser tabs.
+
+    The canonical file stays in place for API and test compatibility.  A hard
+    link avoids duplicating the (potentially large) self-contained document;
+    filesystems that reject hard links fall back to a copy.
+    """
+
+    canonical = Path(directory) / VIEWER_FILE
+    alias = canonical.with_name(viewer_alias_name(name, asset_id))
+    if alias == canonical:
+        return canonical
+    try:
+        if alias.exists() or alias.is_symlink():
+            alias.unlink()
+        os.link(canonical, alias)
+    except OSError:
+        shutil.copyfile(canonical, alias)
+    with contextlib.suppress(OSError):
+        alias.chmod(0o644)
+    return alias
+
+
+def viewer_alias_path(directory: str | Path, *, name: str, asset_id: str = "") -> Path:
+    """Prefer the named viewer when it exists, else the canonical one."""
+
+    canonical = Path(directory) / VIEWER_FILE
+    alias = canonical.with_name(viewer_alias_name(name, asset_id))
+    return alias if alias.is_file() else canonical
 
 
 def _encode(values: np.ndarray) -> str:
@@ -221,8 +266,10 @@ def write_collection_viewer(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(html, encoding="utf-8")
     target.chmod(0o644)
+    alias = link_viewer_alias(target.parent, name=name or title, asset_id="")
     return {
         "path": target,
+        "alias_path": alias,
         "bytes": len(html.encode("utf-8")),
         "triangles": sum(int(entry["triangles"]) for entry in entries),
         "revisions": [entry["revision"] for entry in entries],
@@ -255,8 +302,10 @@ def write_viewer(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(html, encoding="utf-8")
     target.chmod(0o644)
+    alias = link_viewer_alias(target.parent, name=name or title, asset_id="")
     return {
         "path": target,
+        "alias_path": alias,
         "bytes": len(html.encode("utf-8")),
         "triangles": int(len(triangles)),
     }

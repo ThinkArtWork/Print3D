@@ -33,6 +33,17 @@ def test_provider_key_marks_usable(workspace, monkeypatch) -> None:
     assert payload["providers"]["default"] in (None, "tripo", "hunyuan")
 
 
+def test_hunyuan_api_key_is_recognised(workspace, monkeypatch) -> None:
+    monkeypatch.setenv("HUNYUAN3D_API_KEY", "k")
+    loaded, secrets = load_all()
+    payload = build_capabilities(loaded, secrets, builtin_registry())
+    hunyuan = next(p for p in payload["providers"]["cloud"] if p["id"] == "hunyuan")
+    assert hunyuan["adapter"] == "hunyuan_openai"
+    assert hunyuan["base_url"] == "https://api.ai3d.cloud.tencent.com"
+    assert hunyuan["has_key"] is True
+    assert hunyuan["key_source"] == "env"
+
+
 def test_no_targets_means_no_slicer_surface(workspace) -> None:
     loaded, secrets = load_all()
     payload = build_capabilities(loaded, secrets, builtin_registry())

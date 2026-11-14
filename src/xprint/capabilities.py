@@ -37,7 +37,7 @@ def probe_providers(cfg: LoadedConfig, secrets: Secrets) -> dict[str, Any]:
     config = cfg.config
     cloud = []
     for provider_id, entry in sorted(config.providers.cloud.items()):
-        adapter = str(entry.get("adapter", provider_id))
+        adapter = str(entry.get("adapter", provider_id)).strip().lower().replace("-", "_")
         if adapter == "hunyuan":
             secret_id = os.environ.get(str(entry.get("secret_id_env") or "")) or (
                 secrets.provider_field(provider_id, "secret_id")

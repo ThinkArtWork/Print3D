@@ -30,6 +30,10 @@ MANIFEST = "asset.json"
 SCRIPT = "model.py"
 PARAMS = "params.json"
 TRACE = "agent_trace.json"
+INPUT_STEP = "input.step"
+STEP_SUFFIXES = frozenset({".step", ".stp"})
+MAX_INPUT_BYTES = 64 * 1024 * 1024
+OUTPUT_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,24}$")
 
 
 def new_asset_id(now: datetime | None = None) -> str:
@@ -57,6 +61,10 @@ def validate_name(name: str) -> str:
 
 def _iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _iso_from_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(timespec="seconds")
 
 
 class AssetStore:
@@ -177,6 +185,145 @@ class AssetStore:
                 hint="Revisions are listed in the asset manifest.",
             )
         manifest["updated_at"] = params["built_at"]
+        self._write_manifest(asset_id, manifest)
+        return record
+
+    def store_input(
+        self,
+        asset_id: str,
+        revision: str,
+        source: str | Path,
+    ) -> dict[str, Any]:
+        """Copy a STEP file into the revision so later builds stay reproducible."""
+
+        directory = self.revision_dir(asset_id, revision)
+        if not directory.is_dir():
+            raise NotFound(
+                f"Unknown revision: {revision}",
+                hint="Revisions are listed in the asset manifest.",
+            )
+        path = Path(source).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        path = path.resolve()
+        if not path.is_file():
+            raise NotFound(
+                f"input file not found: {source}",
+                hint="Paths are resolved against the server's working directory.",
+            )
+        if path.suffix.lower() not in STEP_SUFFIXES:
+            raise InvalidArgument(
+                "input must be a .step or .stp file",
+                details={"suffix": path.suffix, "accepted": sorted(STEP_SUFFIXES)},
+            )
+        size = path.stat().st_size
+        if size <= 0:
+            raise InvalidArgument("input file is empty", details={"path": str(path)})
+        if size > MAX_INPUT_BYTES:
+            raise InvalidArgument(
+                f"input file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MiB",
+                details={"bytes": size, "limit_bytes": MAX_INPUT_BYTES},
+            )
+        with path.open("rb") as handle:
+            head = handle.read(4096)
+        if b"ISO-10303-21" not in head:
+            raise InvalidArgument(
+                "input does not look like a STEP file",
+                hint="STEP files start with an ISO-10303-21 header; export STEP AP214/AP242.",
+            )
+
+        target = directory / INPUT_STEP
+        if path != target.resolve():
+            shutil.copyfile(path, target)
+        target.chmod(0o644)
+        return {
+            "file": INPUT_STEP,
+            "original_name": path.name,
+            "bytes": target.stat().st_size,
+            "sha256": sha256_file(target),
+            "stored_at": _iso(),
+        }
+
+    def stored_input(self, asset_id: str, revision: str) -> dict[str, Any] | None:
+        """Describe the STEP file already stored on this revision, if any."""
+
+        target = self.revision_dir(asset_id, revision) / INPUT_STEP
+        if not target.is_file():
+            return None
+        meta: dict[str, Any] = {
+            "file": INPUT_STEP,
+            "original_name": INPUT_STEP,
+            "bytes": target.stat().st_size,
+            "sha256": sha256_file(target),
+            "stored_at": _iso_from_mtime(target),
+        }
+        for item in self.load(asset_id).get("revisions", []):
+            if item.get("revision") != revision:
+                continue
+            recorded = (item.get("build") or {}).get("input") or {}
+            meta.update({key: value for key, value in recorded.items() if value})
+            break
+        return meta
+
+    def record_output(
+        self,
+        asset_id: str,
+        revision: str,
+        *,
+        key: str,
+        meta: dict[str, Any] | None = None,
+        files: dict[str, Path] | None = None,
+    ) -> dict[str, Any]:
+        """Attach derived files (a drawing, a render …) to a revision under ``key``."""
+
+        if not OUTPUT_KEY_RE.fullmatch(key):
+            raise InvalidArgument(
+                "output key must be a short lower-case identifier",
+                details={"key": key},
+            )
+        manifest = self.load(asset_id)
+        directory = self.revision_dir(asset_id, revision)
+        if not directory.is_dir():
+            raise NotFound(
+                f"Unknown revision: {revision}",
+                hint="Revisions are listed in the asset manifest.",
+            )
+        stored: dict[str, str] = {}
+        for stored_name, source in (files or {}).items():
+            source_path = Path(source)
+            if not source_path.is_file():
+                continue
+            target = directory / Path(stored_name).name
+            if source_path.resolve() != target.resolve():
+                shutil.copyfile(source_path, target)
+            target.chmod(0o644)
+            stored[Path(stored_name).name] = sha256_file(target)
+
+        payload = {**(meta or {}), "files": stored, "created_at": _iso()}
+        params_path = directory / PARAMS
+        try:
+            params = json.loads(params_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            params = {}
+        params[key] = payload
+        atomic_write_text(
+            params_path,
+            json.dumps(params, indent=2, ensure_ascii=False) + "\n",
+            mode=0o644,
+        )
+
+        record: dict[str, Any] | None = None
+        for item in manifest.get("revisions", []):
+            if item.get("revision") == revision:
+                item[key] = payload
+                record = item
+                break
+        if record is None:
+            raise NotFound(
+                f"Unknown revision: {revision}",
+                hint="Revisions are listed in the asset manifest.",
+            )
+        manifest["updated_at"] = payload["created_at"]
         self._write_manifest(asset_id, manifest)
         return record
 
@@ -328,8 +475,12 @@ class AssetStore:
 
 __all__ = [
     "ASSET_ID_RE",
-    "AssetStore",
+    "INPUT_STEP",
+    "MAX_INPUT_BYTES",
     "NAME_RE",
+    "OUTPUT_KEY_RE",
+    "STEP_SUFFIXES",
+    "AssetStore",
     "new_asset_id",
     "validate_asset_id",
     "validate_name",

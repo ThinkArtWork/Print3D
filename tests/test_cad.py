@@ -138,3 +138,30 @@ def test_broken_script_reports_the_exception(tmp_path: Path) -> None:
     result = run_script(script, workdir=tmp_path / "out", timeout_s=120)
     assert result.ok is False
     assert result.error
+
+
+def test_missing_step_input_is_rejected(tmp_path: Path) -> None:
+    script = _write(tmp_path / "model.py", MODEL)
+    with pytest.raises(NotFound):
+        run_script(script, workdir=tmp_path / "out", input_step=tmp_path / "nope.step")
+
+
+@pytest.mark.skipif(importlib.util.find_spec("build123d") is None, reason="build123d not installed")
+def test_step_input_is_exposed_as_input_step(tmp_path: Path) -> None:
+    from build123d import Box, export_step
+
+    source = tmp_path / "block.step"
+    export_step(Box(20, 10, 6), str(source))
+    script = _write(
+        tmp_path / "model.py",
+        """
+        from build123d import *
+
+        def build_part():
+            return import_step(INPUT_STEP)
+        """,
+    )
+    result = run_script(script, workdir=tmp_path / "out", input_step=source, timeout_s=120)
+    assert result.ok is True, result.error
+    assert result.checks["bbox_mm"] == pytest.approx([20.0, 10.0, 6.0], abs=1e-3)
+    assert result.checks["volume_mm3"] == pytest.approx(1200.0, rel=1e-3)

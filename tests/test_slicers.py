@@ -548,8 +548,7 @@ def test_trim_unused_tool_macros_keeps_each_multi_head_tool(tmp_path: Path) -> N
 def test_trim_unused_tool_macros_dedupes_a_single_toolhead(tmp_path: Path) -> None:
     gcode = tmp_path / "plate.gcode"
     gcode.write_text(
-        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0\n"
-        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n",
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0\nSM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n",
         encoding="utf-8",
     )
     info = trim_unused_tool_macros(

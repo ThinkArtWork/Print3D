@@ -2,7 +2,7 @@
 
 **XPrint 是一个自托管的 3D 打印 MCP 服务。** 它把「文字/图片 → 参数化建模脚本 → 构建 → 渲染 → 切片 → 发送到打印机」做成一组可组合的 MCP 工具，接入 DSH、Codex、Claude Desktop、Cursor 等任意 MCP 宿主。
 
-> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **27 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
+> 状态：**M0 + 建模闭环 + 切片 + 发送已可运行**（2026-11-14）。已有 MCP stdio/HTTP 服务、配置与密钥管理、路径沙箱、任务状态机、资产版本库、沙箱化 CAD 执行器、STEP 导入与 SVG/DXF 工程图纸、概念图生成、四视图预览渲染、OrcaSlicer 切片、Moonraker/OctoPrint/Bambu LAN 发送，以及 **28 个工具**；已在 Snapmaker U1 真机上完成切片、上传与真实打印（25 层 / 325 s / 662 mm），含 Blender bpy、本地生成器、云端生成三条额外路径。生成后可在对话流里直接看四视图 PNG，或用 `model_view` 导出**可旋转/缩放的交互式 HTML 查看器**。
 
 ## 文档
 
@@ -59,7 +59,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 ### 交互式 3D 查看
 
-**每个资产只有一个查看器文件**：`assets/<asset_id>/viewer.html`。它把该资产**所有已构建版本**的几何一起内嵌，右上角有版本下拉框，默认打开最新一版。所以改到第 10 版，对话里仍然只有一个文件卡，不会堆出一排 `viewer.html`。
+**每个资产只有一个查看器文件**：`assets/<asset_id>/viewer.html`。它把该资产**所有已构建版本**的几何一起内嵌，右上角有版本下拉框，默认打开最新一版。同时生成同名硬链接 `<模型名>-viewer.html`（如 `neo-product-116-imagefit-viewer.html`），浏览器标签和文件卡会显示模型名；`viewer.html` 仍保留用于兼容旧链接。所以改到第 10 版，对话里仍然只有一个文件卡，不会堆出一排 `viewer.html`。
 
 - 构建成功时（`model_build`、`blender_run`、`generate_local` / `generate_cloud`）自动重写这个文件并返回 `viewer_file`；宿主执行 `present(viewer_file)` 即可；
 - 旧资产或需要手动刷新时调用 `model_view(asset_id, confirm="VIEW <asset_id>")`；传 `revision="v001"` 可让查看器默认打开该版本；
@@ -82,14 +82,18 @@ XPrint **不自己接任何 LLM**。它把建模闭环的原语暴露成 MCP 工
 ### 路径一：文字 → 模型（直接写脚本）
 
 ```text
-你 → 宿主模型写 build123d 脚本
+你 → 宿主模型写 build123d 脚本（改已有零件：脚本里 import_step(INPUT_STEP)）
    → model_write(script, confirm="WRITE <name>")     # 静态审查，不执行
-   → model_build(asset_id, confirm="BUILD <asset_id>")# 沙箱执行，返回真实几何
+   → model_build(asset_id, input="part.step",        # 可选：把 STEP 挂到本版本
+                 confirm="BUILD <asset_id>")          # 沙箱执行，返回真实几何
    → model_preview(asset_id)                          # 四视图 PNG 回给模型
+   → model_drawing(asset_id, confirm="DRAWING <id>")  # 需要图纸时：SVG/DXF
    → 改脚本 → model_write 追加 v002 → 再 build → 再 preview
 ```
 
 `model_build` 返回 `watertight`、`boundary_edges`、`nonmanifold_edges`、`bbox_mm`、`volume_mm3`、`solids`、`is_valid`，并保存 `model.stl` / `model.step`，同时**自动生成 `viewer.html` 并在返回里给出 `viewer_file`**——宿主把它交给 `present`，对话里就直接出现可点击的 3D 预览，不需要再手动调用 `model_view`。`model_preview` 把 STL 渲染成 ISO/FRONT/TOP/RIGHT 四视图，**以图片内容返回**，所以宿主模型能真的「看见」比例、孔位和缺失特征。
+
+`model_build` 也可以吃**别人的 STEP**：`input="part.step"` 会把文件复制成该版本的 `input.step`（记 sha256、原始文件名与字节数），脚本里用模块全局 `INPUT_STEP` 读取——适合「在已有零件上改一个特征」，而不是从零重画，几何精度与源文件一致（实测 `tourbox-neo.step` → bbox 135.885 × 111.714 × 32.5 mm，218.866 cm³）。需要给同事或供应商一份传统图纸时，`model_drawing` 把 `model.step` 投影成**第三角四视图合图**（front/top/right/iso，正交视图带虚线隐藏线、等轴测按惯例不画隐藏线、视图标签、1:1 真实毫米），写成 `drawing.svg` / `drawing.dxf`，再用 `asset_export(artifact="svg")` 或 `("dxf")` 取走；图纸同样随版本保存，`model_show` 会列出来。
 
 ### 路径二：文字/图片 → 概念图 → 模型（视觉参考）
 
@@ -150,6 +154,38 @@ XPrint 不内置视觉模型：上传的草图/照片由宿主模型（多模态
 - 实测（Blender 5.3.0，M1）：20 mm 立方体 + 直径 6 mm 通孔，整个 Blender 进程 0.9–1.1 s，四视图预览正常。
 - 导出脚本只认 `MESH` 对象，**布尔切割用的辅助对象记得删除**，否则会一起导出（预览/bbox 会暴露这种残留）。
 
+### 路径三点五：mesh_fit（图生网格 → 真实尺寸成品）
+
+图生 3D 返回的是“形状”，不是可交付的尺寸。真实产品的长宽高应查厂商规格；`mesh_fit` 把已经生成的 STL/GLB/OBJ 作为形状真相，一次完成清理、缩放、居中落地、减面和导出，不重新凭照片摆控件。
+
+```text
+mesh_fit(
+  asset_id="a_...",                  # 或 source="/path/model.stl"
+  size_mm=[116, 101, 44],            # 已知真实外形：三轴精确校准
+  name="neo-product-116",
+  max_triangles=145000,
+  image="/path/neo.jpg",             # 可选：把参考图附到版本
+  confirm="FIT neo-product-116",
+)
+```
+
+只要求“最长边”而不知道三轴尺寸时，改用等比模式（不会拉歪比例）：
+
+```text
+mesh_fit(
+  source="/path/model.stl",
+  max_dimension_mm=120,              # 与 size_mm 二选一
+  name="product-display",
+  confirm="FIT product-display",
+)
+```
+
+- 输入二选一：`source=` 是 STL/GLB/GLTF/OBJ 路径；`asset_id=` 读取该资产最新版（或 `revision=` 指定版）的 `model.stl`。
+- 尺寸二选一：`size_mm=[x,y,z]` 做三轴精确缩放；`max_dimension_mm=<最长边>` 按最长边等比缩放，保持图片比例。两者都省略会报参数错误。
+- 内部在 Blender 中合并重复点、补边界洞、重算法线，缩放后 XY 居中、底面落在 `z=0`，再 decimate 到 `max_triangles`，最后三角化并再清理一次。
+- 返回与 `blender_run` 相同的 geometry checks、STL/GLB 和带模型名的 viewer；`max_triangles` 默认 145,000，是为了让 `model_preview` 完整渲染（超过 150,000 会被抽样成线框），不是几何上限。
+- 这是这次 TourBox Neo 正确模型的固化路径：混元网格保留轮廓，官方 116×101×44 mm 校准尺寸，145k 面导出，得到 watertight 成品。
+
 ### 路径四：本地生成器（通用命令适配器）
 
 不下载模型权重，也不绑定某个框架：任何能读提示词/图片、写出 STL 的本地命令都能接进来。
@@ -200,12 +236,12 @@ generate_local(provider="triposr", prompt=..., image=..., confirm="LOCAL <name>"
         "timeout_s": 600
       },
       "hunyuan": {
-        "adapter": "hunyuan",
-        "region": "ap-guangzhou",
+        "adapter": "hunyuan_openai",
+        "base_url": "https://api.ai3d.cloud.tencent.com",
         "model": "3.0",
-        "secret_id_env": "TENCENTCLOUD_SECRET_ID",
-        "secret_key_env": "TENCENTCLOUD_SECRET_KEY",
-        "scale": 1,
+        "api_key_env": "HUNYUAN3D_API_KEY",
+        "scale": 1000,
+        "face_count": 200000,
         "timeout_s": 600
       }
     }
@@ -218,13 +254,14 @@ generate_cloud(provider="tripo", prompt=..., image=..., confirm="CLOUD <name>")
    → 提交文生/图生任务，立即返回 job_id（真后台）
    → job_status 轮询：progress 5–95%，message 显示 provider 状态
    → success：下载 model_url → trimesh 转 STL（支持 GLB/OBJ/GLTF/FBX）
-   → 存 model.stl（+ 原始 model.glb/obj），geometry checks，资产 kind=cloud
+   → 可选 size_mm=[x,y,z] 或 max_dimension_mm=<最长边>：自动执行同一套 mesh fit
+   → 存 model.stl（+ 原始 source.stl/model.glb/obj），geometry checks，资产 kind=cloud
    → model_preview(asset_id)
 ```
 
-- 凭据：Tripo 用 `TRIPO_API_KEY`（Bearer）；混元用腾讯云 `TENCENTCLOUD_SECRET_ID`/`TENCENTCLOUD_SECRET_KEY`（TC3-HMAC-SHA256 签名，`region` 默认 `ap-guangzhou`，接口 `ai3d.tencentcloudapi.com`，Version `2025-05-13`）。`capabilities.providers.cloud` 只显示是否配置，不返回密钥。
-- 尺度：Tripo 的 GLB 按米导出，`scale: 1000` 换成毫米；混元直接请求 `ResultFormat: STL`，`scale: 1`。转换后仍以 STL 的真实 bbox/volume 为准。
-- 计费：每次生成消耗 provider 额度；Tripo 的 `credits_consumed` 会写进资产 `usage`。
+- 凭据：Tripo 用 `TRIPO_API_KEY`（Bearer）。混元默认走 OpenAI 兼容模式（`adapter: hunyuan_openai`），`Authorization` 直接放 API Key，环境变量 `HUNYUAN3D_API_KEY`；接口为 `POST /v1/ai3d/submit` 与 `POST /v1/ai3d/query`，请求提交 `ImageBase64`/`Prompt`，查询按 `JobId` 返回 `Status` 与 `ResultFile3Ds`。旧的腾讯云 TC3 模式仍保留：把 `adapter` 改为 `hunyuan` 并配置 `TENCENTCLOUD_SECRET_ID`/`TENCENTCLOUD_SECRET_KEY` 即可。`capabilities.providers.cloud` 只显示是否配置，不返回密钥。
+- 尺度：云端网格不带真实物理尺寸。Tripo GLB 按米导出，默认 `scale: 1000`；混元接口返回的 STL 也可能被厂商归一化（实测 bbox 远小于目标），默认同样用 `1000` 只是与 Tripo 对齐。请按生成后的 bbox 调整 `scale`，不要把它当成设计尺寸。
+- 计费：每次生成消耗 provider 额度；Tripo 的 `credits_consumed`、混元的 `ResultCreditConsumed` 会写进资产 `usage`。
 - 失败：provider 的 `error_message` 与 `task_id` 进入 job 错误；轮询超时由 `timeout_s`（默认 600 s）控制。
 
 ### 路径六：切片（OrcaSlicer CLI）
@@ -438,17 +475,19 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 | `asset_list` | 否 | 列出资产与版本数 |
 | `model_show` | 否 | 读回资产清单、指定版本源码、`params.json` 与 reference |
 | `blender_run` | 是 | 用 Blender 后台模式执行 bpy 脚本，导出 STL/GLB 并检查；`confirm` 精确为 `BLENDER <name>` / `BLENDER <asset_id>` |
+| `mesh_fit` | 是 | 把已有 STL/GLB/OBJ（或资产版本）按真实 `size_mm` 或 `max_dimension_mm` 校准，清理、居中落地、减面、导出 STL/GLB 和命名 viewer；`confirm` 精确为 `FIT <name>` |
 | `generate_local` | 是 | 后台运行 `providers.local.<id>` 命令生成 STL，建资产并返回 `job_id`；`confirm` 精确为 `LOCAL <name>` |
-| `generate_cloud` | 是 | 后台提交 Tripo/混元 3D 任务，轮询后下载并转 STL 建资产；`confirm` 精确为 `CLOUD <name>` |
+| `generate_cloud` | 是 | 后台提交 Tripo/混元 3D 任务，轮询后下载并转 STL 建资产；可传 `size_mm`/`max_dimension_mm` 自动校准后建资产；`confirm` 精确为 `CLOUD <name>` |
 | `image_generate` | 是 | 文生概念图并存入 `references/`；`confirm` 精确为 `IMAGE <name>`，图片内联返回 |
 | `reference_import` | 是 | 把用户已有的草图/照片导入为 reference；`confirm` 精确为 `IMPORT <name>` |
 | `model_write` | 是 | 存入 build123d 脚本（新建或追加版本，可带 reference）；`confirm` 精确为 `WRITE <name>` / `WRITE <asset_id>` |
-| `model_build` | 是 | 沙箱执行某版本，返回 geometry checks，存 STL/STEP 并自动生成 `viewer.html`；`confirm` 精确为 `BUILD <asset_id>` |
+| `model_build` | 是 | 沙箱执行某版本；`input=<step>` 时把 STEP 复制成版本内 `input.step` 并暴露为脚本全局 `INPUT_STEP`；返回 geometry checks，存 STL/STEP 并自动生成 `viewer.html`；`confirm` 精确为 `BUILD <asset_id>` |
+| `model_drawing` | 是 | 把已构建的 `model.step` 投影成第三角四视图 SVG/DXF 图纸（虚线隐藏线、视图标签、1:1 毫米），存 `drawing.svg`/`drawing.dxf`；`confirm` 精确为 `DRAWING <asset_id>` |
 | `model_preview` | 否* | 四视图 PNG（含概念图对比）内联返回；只写 `cache/previews/`，不改资产 |
 | `model_view` | 是 | 把资产的全部已构建版本合并成一个交互式 3D 查看器（下拉切换版本，WebGL 旋转/缩放/平移/自旋/截图）；`confirm` 精确为 `VIEW <asset_id>` |
 | `printability_check` | 否 | 只读几何可打印性报告：悬垂、支撑估计、薄壁、热床接触/尺寸、0–100 分与 issues |
 | `orientation_plan` | 否 | 只读摆放排序：24 个轴向旋转的悬垂/支撑/高度/接触代价，返回推荐旋转与候选指标 |
-| `asset_export` | 是 | 把 STL/STEP/脚本复制到用户可打开的位置；`confirm` 精确为 `EXPORT <asset_id>` |
+| `asset_export` | 是 | 把 STL/STEP/脚本/SVG/DXF 图纸复制到用户可打开的位置；`confirm` 精确为 `EXPORT <asset_id>` |
 | `slice_capabilities` | 否 | 列出 targets、slicer 版本、预设是否解析、bed |
 | `slice_plan` | 否 | 切片 dry-run：presets、命令、checks、确认串；不写文件 |
 | `slice_run` | 是 | 外部 OrcaSlicer 后台切片，G-code/统计存 `slices/<slice_id>/`；`confirm` 精确为 `SLICE <asset_id> <target>` |
@@ -480,7 +519,7 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 .venv/bin/python -m ruff format src tests
 ```
 
-测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、交互式查看器（几何内嵌、标题转义、面数上限）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`model_view`/`asset_export`/`reference_import`/`blender_run`/`generate_local`/`generate_cloud`、打印前检查（薄壁/悬垂/支撑估计/热床/24 向摆放排序）、MCP stdio 握手与 HTTP Bearer 鉴权、打印机适配器（respx 模拟 Moonraker/OctoPrint：状态映射、上传、启动、取消、401、不可达）与 `printer_*`/`send` 工具（忙碌拒绝、型号不匹配、确认串、异步上传启动）。
+测试覆盖：配置优先级与 BOM、路径逃逸与符号链接、任务状态机非法迁移、脚本策略、资产版本 v001→v002 与 reference、CAD 子进程（真实 build123d 立方体：watertight/bbox/volume、超时杀进程）、概念图生成（respx 模拟，含 401/429/超时/base64/URL 下载）、四视图渲染（二进制/ASCII STL、像素级校验）、交互式查看器（几何内嵌、标题转义、面数上限）、bpy 策略与 Blender 执行（假 Blender 覆盖成功/失败/超时/无导出；真机立方体）、本地生成器（命令模板、STL 发现、超时、环境变量）、后台任务执行器、`model_write`/`model_build`/`model_preview`/`model_view`/`asset_export`/`reference_import`/`blender_run`/`mesh_fit`/`generate_local`/`generate_cloud`、打印前检查（薄壁/悬垂/支撑估计/热床/24 向摆放排序）、MCP stdio 握手与 HTTP Bearer 鉴权、打印机适配器（respx 模拟 Moonraker/OctoPrint：状态映射、上传、启动、取消、401、不可达）与 `printer_*`/`send` 工具（忙碌拒绝、型号不匹配、确认串、异步上传启动）。
 
 ## 目录
 
@@ -488,7 +527,7 @@ orientation_plan(asset_id="a_2026...", target="u1", limit=3)
 XPrint/
   pyproject.toml
   src/xprint/
-    server.py          # MCP 入口（stdio / streamable HTTP）+ 27 个工具
+    server.py          # MCP 入口（stdio / streamable HTTP）+ 28 个工具
     cli.py             # xprint init|capabilities|status|config|tools|serve|job|cad|view|image|preview
     config.py          # config.json / secrets / 环境变量优先级
     workspace.py       # ~/.xprint 布局 + safe_path 沙箱
@@ -515,9 +554,10 @@ XPrint/
 | 对话式创作 | ✅ 宿主模型驱动 `model_write`/`model_build`/`model_preview`；每轮是同一资产的新版本 |
 | 图片理解 | ✅ 多模态宿主模型看图 + `reference_import`/`image_generate` 存 reference，预览时回传对比 |
 | Blender 文/图生 3D | ✅ `blender_run`（bpy 脚本 → STL/GLB + 四视图）；图生 3D 由宿主模型看图写场景 |
+| 图生网格校准 | ✅ `mesh_fit` 把已有网格校准到真实毫米尺寸或最长边、清理减面并导出成品；`generate_cloud` 可直接自动 fit |
 | 本地模型文/图生 3D | ✅ `generate_local` 通用命令适配器（TripoSR / Hunyuan3D / ComfyUI 等，以本机命令为准） |
 | 云端文/图生 3D（Tripo/混元） | ✅ `generate_cloud` 异步任务 + 下载 + 转 STL + 预览（需配置 key） |
-| 导出模型文件 | ✅ `asset_export`（STL/STEP/脚本） |
+| 导出模型文件 | ✅ `asset_export`（STL/STEP/脚本/SVG/DXF）；`model_drawing` 出第三角四视图工程图纸 |
 | 切片（G-code） | ✅ `slice_*` 四件套，外部 OrcaSlicer，异步任务 + 统计 |
 | 打印机管理 | ✅ `printer_save` / `printer_remove` / `printer_list`，config.json 按 id upsert；9 工具头 preflight |
 | 切片后发送打印机 | ✅ Moonraker / OctoPrint / Bambu LAN / PrusaLink / 声明式 HTTP 适配器，`send`（上传+启动）与 `printer_cancel`；Snapmaker U1 真机打印完成（25 层 / 325 s）；Bambu 与 PrusaLink 未真机验证 |
@@ -531,4 +571,5 @@ XPrint/
 - **M2（完成，2026-11-14）**：切片器适配（Orca 外部进程，profile 运行时读取，overrides 私有副本）、`slice_capabilities`/`slice_plan`/`slice_run`/`slice_inspect`、G-code 与 statistics 双源元数据，18 个工具。Snapmaker U1 因厂商 CLI 段错误暂不可用。
 - **M3（完成，2026-11-14）**：打印机 CRUD、Moonraker/OctoPrint/Bambu LAN/PrusaLink/声明式 HTTP 适配器、`send` 上传+启动、`printer_cancel`，24 个工具；Snapmaker U1 真机完成切片→上传→打印（25 层 / 325 s / 662 mm）。Bambu 与 PrusaLink 只有单元测试。
 - **M3.6（完成，2026-11-14）**：新增 `printability_check` 与 `orientation_plan` 两个只读几何工具（薄壁射线估计、悬垂/支撑估计、热床适配、24 向摆放排序），27 个工具。
+- **M3.7（完成，2026-11-14）**：`model_build` 支持 `input=<step>`（STEP 复制进版本并暴露为 `INPUT_STEP`），新增 `model_drawing` 出第三角四视图 SVG/DXF 图纸（`asset_export` 可导出），28 个工具。原因：用户要求「改已有 STEP」与「出工程图」补上 FreeCAD 的两项实际用途。
 - **M3.5（已移除，2026-11-14）**：曾实现并安装 DSH 左侧栏只读面板；因与对话流里的 `model_preview` 重复、维护成本高，当日卸载并删除。交互式 3D 改由 `model_view` 的单文件 HTML 提供，25 个工具。
