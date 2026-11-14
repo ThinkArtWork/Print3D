@@ -257,10 +257,30 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1")
 slice_inspect(slice_id)                  → 层数、预计时间、耗材、printer_model、warnings
 ```
 
-- `overrides` 通过复制 vendor 预设到私有 datadir、改写 process JSON 实现；用户安装的 profile 不动。
+切片时可以直接告诉 XPrint 工艺要求，系统把它们写进本次切片的 process/filament 私有副本：
+
+```text
+slice_plan(asset_id, "a1", material="PETG", layer_height=0.24,
+           infill="gyroid", infill_density=30, strength="strong")
+slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
+          material="PETG", layer_height=0.24, infill="gyroid",
+          infill_density=30, strength="strong")
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `material` | PLA / PLA+ / PETG / ABS / ASA / TPU / PC / PA / NYLON；自动匹配喷嘴与热床温度（PLA 210/60、PETG 240/80、ABS 260/100、TPU 225/45…） |
+| `layer_height` | 层高 mm，0.05–1.0 |
+| `infill` | grid / gyroid / honeycomb / cubic / concentric / triangle / line / rectilinear / zigzag / crosshatch / lightning / adaptivecubic / supportcubic |
+| `infill_density` | 填充密度 %，0–100；`-1` 表示沿用预设 |
+| `strength` | `light` / `normal` / `strong`，映射墙数 2/3/4、顶/底层 3/4/5；也可单独传 `walls`、`top_shells`、`bottom_shells` |
+| `bed_temp` / `nozzle_temp` | 显式覆盖材料默认温度 |
+
+- `overrides` 与上述参数通过复制 vendor 预设到私有 datadir、改写 process/filament JSON 实现；用户安装的 profile 不动。独立扁平 profile（如 U1）则复制到本次切片工作目录的 `profiles/` 后改写。
+- `slice_plan` 只预览 `profile_overrides`，不写文件；`slice_run` 的 `slice_inspect` 记录里保留本次 `options`。
 - G-code 头与 `*.statistics.json` 双源读取；与目标 `printer_model` 不符、超出 bed 都会写 warning。
 - 实测（OrcaSlicer 2.5.0 + Bambu A1，0.16 mm）：20×20×10 带孔方块 → 62 层、16m01s、2.31 g、332 KB G-code。
-- 已知限制：Snapmaker Orca 01.10.01.50 无头加载 U1 预设即段错误（连 `--export-settings` 也崩），U1 目标暂不可用；厂商修 CLI 后只需加一条 target 配置。
+- Snapmaker U1：厂商 Snapmaker Orca 01.10.01.50 无头加载 U1 预设即段错误，因此 U1 target 改用上游 OrcaSlicer 2.5.0 + 扁平化并清理过条件表达式的 U1 profile（见 `targets.u1`）；真机已完成 25 层小件打印。
 
 ### 路径七：发送到打印机（Moonraker / OctoPrint / Bambu LAN / PrusaLink / 自定义 HTTP）
 

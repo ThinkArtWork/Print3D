@@ -63,6 +63,7 @@ from .runner import JobRunner
 from .script_policy import check_script, summarise
 from .slicers import (
     PreparedProfiles,
+    SliceOptions,
     SliceStore,
     build_command,
     find_slicer,
@@ -273,6 +274,45 @@ def _printer_entry(rt: Runtime, printer_id: str):
         f"Unknown printer: {printer_id}",
         hint=f"Configured printers: {known}. Add one with printer_save.",
     )
+
+
+def _slice_options(
+    *,
+    material: str = "",
+    layer_height: float = 0,
+    infill: str = "",
+    infill_density: float = -1,
+    walls: int = 0,
+    top_shells: int = 0,
+    bottom_shells: int = 0,
+    strength: str = "",
+    bed_temp: int = 0,
+    nozzle_temp: int = 0,
+) -> SliceOptions | None:
+    """Build SliceOptions from MCP arguments (0 / -1 mean "unset")."""
+
+    def positive(value: float | int) -> float | None:
+        return float(value) if value and value > 0 else None
+
+    def count(value: int) -> int | None:
+        return int(value) if value and value > 0 else None
+
+    density = float(infill_density) if infill_density is not None and infill_density >= 0 else None
+    options = SliceOptions(
+        material=(material or "").strip(),
+        layer_height=positive(layer_height),
+        infill=(infill or "").strip(),
+        infill_density=density,
+        walls=count(walls),
+        top_shells=count(top_shells),
+        bottom_shells=count(bottom_shells),
+        strength=(strength or "").strip(),
+        bed_temp=count(bed_temp),
+        nozzle_temp=count(nozzle_temp),
+    )
+    if options.resolved() == SliceOptions().resolved():
+        return None
+    return options
 
 
 def _asset_viewer(
@@ -1520,12 +1560,42 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         name="slice_plan",
         description=(
             "Dry-run a slice: resolve the target presets, report bed size and model "
-            "checks, and print the exact command slice_run would execute. Read-only."
+            "checks, preview process/material options (material, layer_height, infill, "
+            "infill_density, walls, top_shells, bottom_shells, strength, bed_temp, "
+            "nozzle_temp) and print the exact command slice_run would execute. Read-only: "
+            "it reports the overrides that slice_run will write into a private preset copy."
         ),
     )
-    def slice_plan(asset_id: str, target: str, revision: str = "") -> dict[str, Any]:
+    def slice_plan(
+        asset_id: str,
+        target: str,
+        revision: str = "",
+        material: str = "",
+        layer_height: float = 0,
+        infill: str = "",
+        infill_density: float = -1,
+        walls: int = 0,
+        top_shells: int = 0,
+        bottom_shells: int = 0,
+        strength: str = "",
+        bed_temp: int = 0,
+        nozzle_temp: int = 0,
+    ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
+            options = _slice_options(
+                material=material,
+                layer_height=layer_height,
+                infill=infill,
+                infill_density=infill_density,
+                walls=walls,
+                top_shells=top_shells,
+                bottom_shells=bottom_shells,
+                strength=strength,
+                bed_temp=bed_temp,
+                nozzle_temp=nozzle_temp,
+            )
+            options_summary = options.resolved() if options is not None else None
             configured = rt.loaded.config.target(target)
             assets = AssetStore(rt.workspace)
             manifest = assets.load(asset_id)
@@ -1561,7 +1631,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             bed = parse_machine_bed(machine)
             checks = stats_for_stl(stl)
             warnings: list[str] = []
-            if configured.overrides:
+            if configured.overrides or options is not None:
                 warnings.append(
                     "overrides are applied to a private copy of the vendor presets at slice time"
                 )
@@ -1584,7 +1654,12 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 process=process,
                 filament=filaments,
                 datadir=Path(configured.datadir).expanduser() if configured.datadir else None,
+                options=options_summary,
             )
+            profile_overrides = {
+                "process": options.process_overrides() if options is not None else {},
+                "filament": options.filament_overrides() if options is not None else {},
+            }
             command = (
                 build_command(
                     binary,
@@ -1605,6 +1680,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "printer_model": configured.printer_model,
                 "slicer": info.to_dict() if info is not None else None,
                 "profiles": prepared.to_dict(),
+                "options": options_summary,
+                "profile_overrides": profile_overrides,
                 "bed_mm": list(bed) if bed else None,
                 "checks": checks,
                 "command": command,
@@ -1621,8 +1698,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         name="slice_run",
         description=(
             "Slice a built revision for a configured target with the external "
-            "OrcaSlicer CLI. Runs as an async job (poll job_status). confirm must be "
-            "exactly 'SLICE <asset_id> <target>'."
+            "OrcaSlicer CLI, optionally with process/material options (material implies "
+            "nozzle/bed temperatures; layer_height, infill, infill_density, walls, "
+            "top_shells, bottom_shells, strength override the process preset). Runs as "
+            "an async job (poll job_status). confirm must be exactly 'SLICE <asset_id> <target>'."
         ),
     )
     def slice_run(
@@ -1631,6 +1710,16 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         confirm: str,
         revision: str = "",
         timeout_s: float = 0,
+        material: str = "",
+        layer_height: float = 0,
+        infill: str = "",
+        infill_density: float = -1,
+        walls: int = 0,
+        top_shells: int = 0,
+        bottom_shells: int = 0,
+        strength: str = "",
+        bed_temp: int = 0,
+        nozzle_temp: int = 0,
     ) -> dict[str, Any]:
         try:
             validate_asset_id(asset_id)
@@ -1640,6 +1729,19 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     f"confirm must be exactly {expected!r}",
                     details={"expected": expected},
                 )
+            options = _slice_options(
+                material=material,
+                layer_height=layer_height,
+                infill=infill,
+                infill_density=infill_density,
+                walls=walls,
+                top_shells=top_shells,
+                bottom_shells=bottom_shells,
+                strength=strength,
+                bed_temp=bed_temp,
+                nozzle_temp=nozzle_temp,
+            )
+            options_summary = options.resolved() if options is not None else None
             configured = rt.loaded.config.target(target)
             assets = AssetStore(rt.workspace)
             manifest = assets.load(asset_id)
@@ -1678,6 +1780,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     slice_dir,
                     timeout_s=budget,
                     slicer_path=configured.slicer_path,
+                    options=options,
                 )
                 record = SliceStore(rt.workspace).save_result(
                     slice_id=slice_id,
@@ -1687,6 +1790,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     target=configured,
                     result=result,
                     slicer=info,
+                    options=options_summary,
                 )
                 rt.record_write(f"slices/{slice_id}/slice.json")
                 if not result.ok:
@@ -1713,7 +1817,12 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             job = runner.submit(
                 "slice.run",
                 work,
-                params={"asset_id": asset_id, "revision": rev, "target": target},
+                params={
+                    "asset_id": asset_id,
+                    "revision": rev,
+                    "target": target,
+                    "options": options_summary,
+                },
                 provider=target,
             )
             return {
@@ -1723,6 +1832,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "slice_id": slice_id,
                 "target": target,
                 "printer_model": configured.printer_model,
+                "options": options_summary,
                 "timeout_s": budget,
                 "hint": (
                     f"Poll job_status({job.id}); on success call "
@@ -1734,7 +1844,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
 
     @server.tool(
         name="slice_inspect",
-        description="Read a stored slice record, its statistics and G-code path. Read-only.",
+        description=(
+            "Read a stored slice record, its statistics, process/material options and "
+            "G-code path. Read-only."
+        ),
     )
     def slice_inspect(slice_id: str) -> dict[str, Any]:
         try:

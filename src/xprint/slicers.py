@@ -57,6 +57,190 @@ _MODEL_TIME_RE = re.compile(r"model printing time:\s*([^;\n]+)", re.IGNORECASE)
 _PRINTABLE_RE = re.compile(r"^;\s*printable_area\s*=\s*(.+)$", re.MULTILINE)
 _VERSION_RE = re.compile(r"(OrcaSlicer|Snapmaker[_ ]Orca|BambuStudio)[-_ ]?v?(\d+(?:\.\d+)+)")
 
+#: Nozzle / bed temperature pairs used when the caller names a material but
+#: does not override temperatures.  Values are conservative Orca defaults.
+MATERIAL_TEMPS: dict[str, tuple[int, int]] = {
+    "PLA": (210, 60),
+    "PLA+": (215, 60),
+    "PETG": (240, 80),
+    "ABS": (260, 100),
+    "ASA": (260, 100),
+    "TPU": (225, 45),
+    "PC": (270, 110),
+    "PA": (260, 70),
+    "NYLON": (260, 70),
+}
+
+INFILL_PATTERNS = frozenset(
+    {
+        "grid",
+        "gyroid",
+        "honeycomb",
+        "cubic",
+        "concentric",
+        "triangle",
+        "line",
+        "rectilinear",
+        "zigzag",
+        "crosshatch",
+        "lightning",
+        "adaptivecubic",
+        "supportcubic",
+    }
+)
+
+#: strength preset -> (walls, top shells, bottom shells)
+STRENGTH_PRESETS: dict[str, tuple[int, int, int]] = {
+    "light": (2, 3, 2),
+    "normal": (3, 4, 3),
+    "strong": (4, 5, 4),
+}
+
+
+@dataclass(slots=True)
+class SliceOptions:
+    """User-facing process/material choices for one slice.
+
+    ``None`` means "keep the preset value"; the server converts omitted MCP
+    arguments to ``None``.  Material implies conservative nozzle/bed
+    temperatures, which can still be overridden explicitly.
+    """
+
+    material: str = ""
+    layer_height: float | None = None
+    infill: str = ""
+    infill_density: float | None = None
+    walls: int | None = None
+    top_shells: int | None = None
+    bottom_shells: int | None = None
+    strength: str = ""
+    bed_temp: int | None = None
+    nozzle_temp: int | None = None
+
+    def resolved(self) -> dict[str, Any]:
+        material = self.material.strip().upper()
+        nozzle = self.nozzle_temp
+        bed = self.bed_temp
+        if material:
+            pair = MATERIAL_TEMPS.get(material)
+            if pair is None and nozzle is None and bed is None:
+                raise InvalidArgument(
+                    f"Unknown material: {material}",
+                    hint=(
+                        "Use one of "
+                        + ", ".join(sorted(MATERIAL_TEMPS))
+                        + ", or pass nozzle_temp/bed_temp explicitly."
+                    ),
+                )
+            if pair is not None:
+                nozzle = nozzle if nozzle is not None else pair[0]
+                bed = bed if bed is not None else pair[1]
+        if nozzle is not None and not 150 <= int(nozzle) <= 350:
+            raise InvalidArgument("nozzle_temp must be between 150 and 350 °C")
+        if bed is not None and not 0 <= int(bed) <= 150:
+            raise InvalidArgument("bed_temp must be between 0 and 150 °C")
+
+        layer = self.layer_height
+        if layer is not None and not 0.05 <= float(layer) <= 1.0:
+            raise InvalidArgument("layer_height must be between 0.05 and 1.0 mm")
+        density = self.infill_density
+        if density is not None and not 0 <= float(density) <= 100:
+            raise InvalidArgument("infill_density must be between 0 and 100 percent")
+        infill = self.infill.strip().lower()
+        if infill and infill not in INFILL_PATTERNS:
+            raise InvalidArgument(
+                f"Unknown infill pattern: {infill}",
+                hint="Use one of " + ", ".join(sorted(INFILL_PATTERNS)) + ".",
+            )
+
+        strength = self.strength.strip().lower()
+        walls = self.walls
+        top = self.top_shells
+        bottom = self.bottom_shells
+        if strength:
+            preset = STRENGTH_PRESETS.get(strength)
+            if preset is None:
+                raise InvalidArgument(
+                    f"Unknown strength: {strength}",
+                    hint="Use light, normal or strong, or pass walls/top_shells/bottom_shells.",
+                )
+            walls = walls if walls is not None else preset[0]
+            top = top if top is not None else preset[1]
+            bottom = bottom if bottom is not None else preset[2]
+        if walls is not None and not 1 <= int(walls) <= 10:
+            raise InvalidArgument("walls must be between 1 and 10")
+        if top is not None and not 1 <= int(top) <= 20:
+            raise InvalidArgument("top_shells must be between 1 and 20")
+        if bottom is not None and not 1 <= int(bottom) <= 20:
+            raise InvalidArgument("bottom_shells must be between 1 and 20")
+
+        return {
+            "material": material or None,
+            "layer_height": float(layer) if layer is not None else None,
+            "infill": infill or None,
+            "infill_density": float(density) if density is not None else None,
+            "walls": int(walls) if walls is not None else None,
+            "top_shells": int(top) if top is not None else None,
+            "bottom_shells": int(bottom) if bottom is not None else None,
+            "strength": strength or None,
+            "bed_temp": int(bed) if bed is not None else None,
+            "nozzle_temp": int(nozzle) if nozzle is not None else None,
+        }
+
+    def process_overrides(self) -> dict[str, str]:
+        data = self.resolved()
+        overrides: dict[str, str] = {}
+        if data["layer_height"] is not None:
+            overrides["layer_height"] = f"{data['layer_height']:g}"
+        if data["infill"]:
+            overrides["sparse_infill_pattern"] = data["infill"]
+        if data["infill_density"] is not None:
+            overrides["sparse_infill_density"] = f"{int(data['infill_density'])}%"
+        if data["walls"] is not None:
+            overrides["wall_loops"] = str(data["walls"])
+        if data["top_shells"] is not None:
+            overrides["top_shell_layers"] = str(data["top_shells"])
+        if data["bottom_shells"] is not None:
+            overrides["bottom_shell_layers"] = str(data["bottom_shells"])
+        return overrides
+
+    def filament_overrides(self) -> dict[str, str]:
+        data = self.resolved()
+        overrides: dict[str, str] = {}
+        if data["material"]:
+            overrides["filament_type"] = data["material"]
+        if data["nozzle_temp"] is not None:
+            nozzle = str(data["nozzle_temp"])
+            # OrcaSlicer reads the nozzle_temperature_* keys; the Bambu-style
+            # temperature keys are kept for forks that still use them.
+            overrides.update(
+                {
+                    "nozzle_temperature": nozzle,
+                    "nozzle_temperature_initial_layer": nozzle,
+                    "temperature": nozzle,
+                    "first_layer_temperature": nozzle,
+                }
+            )
+        if data["bed_temp"] is not None:
+            bed = str(data["bed_temp"])
+            overrides.update(
+                {
+                    "bed_temperature": bed,
+                    "first_layer_bed_temperature": bed,
+                }
+            )
+            for plate in (
+                "hot_plate",
+                "textured_plate",
+                "cool_plate",
+                "eng_plate",
+                "supertack_plate",
+                "graphic_effect_plate",
+            ):
+                overrides[f"{plate}_temp"] = bed
+                overrides[f"{plate}_temp_initial_layer"] = bed
+        return overrides
+
 
 def new_slice_id() -> str:
     """Return a fresh slice id such as ``s_20261114T083000Z_ab12cd``."""
@@ -222,6 +406,8 @@ class PreparedProfiles:
     filament: list[Path]
     datadir: Path | None = None
     overrides: dict[str, Any] = field(default_factory=dict)
+    filament_overrides: dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -231,11 +417,67 @@ class PreparedProfiles:
             "filament": [str(item) for item in self.filament],
             "datadir": str(self.datadir) if self.datadir else None,
             "overrides": dict(self.overrides),
+            "filament_overrides": dict(self.filament_overrides),
+            "options": dict(self.options) if self.options else None,
             "warnings": list(self.warnings),
         }
 
 
-def prepare_profiles(target: TargetSettings, workdir: Path) -> PreparedProfiles:
+def _prepare_standalone(
+    *,
+    machine: Path,
+    process: Path,
+    filaments: list[Path],
+    datadir: Path | None,
+    overrides: dict[str, Any],
+    filament_overrides: dict[str, str],
+    options: dict[str, Any] | None,
+    workdir: Path,
+    warnings: list[str],
+) -> PreparedProfiles:
+    """Patch flattened presets that are not inside a vendor bundle.
+
+    Snapmaker U1 profiles are exported as standalone JSON files, so there is
+    no ``system/<Vendor>`` tree to copy.  OrcaSlicer accepts these files
+    directly, so we only need private copies of the two we modify.
+    """
+    folder = workdir / "profiles"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def _copy_and_patch(source: Path, values: dict[str, Any]) -> Path:
+        target = folder / source.name
+        shutil.copyfile(source, target)
+        if values:
+            data = json.loads(target.read_text(encoding="utf-8-sig"))
+            data.update(values)
+            target.write_text(
+                json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+            )
+        return target
+
+    process_copy = _copy_and_patch(process, overrides)
+    filament_copy = [_copy_and_patch(item, filament_overrides) for item in filaments]
+    warnings.append(
+        "process/material overrides were written to standalone copies under the slice "
+        "workdir; the installed presets stay untouched"
+    )
+    return PreparedProfiles(
+        machine=machine,
+        process=process_copy,
+        filament=filament_copy,
+        datadir=datadir,
+        overrides=overrides,
+        filament_overrides=filament_overrides,
+        options=options,
+        warnings=warnings,
+    )
+
+
+def prepare_profiles(
+    target: TargetSettings,
+    workdir: Path,
+    options: SliceOptions | None = None,
+) -> PreparedProfiles:
     """Resolve profiles, applying ``overrides`` through a private datadir copy.
 
     OrcaSlicer resolves preset files inside its datadir bundle, so editing a
@@ -245,18 +487,39 @@ def prepare_profiles(target: TargetSettings, workdir: Path) -> PreparedProfiles:
     machine, process, filaments = resolve_profiles(target)
     datadir = Path(target.datadir).expanduser() if target.datadir else None
     overrides = {key: _coerce_override(value) for key, value in (target.overrides or {}).items()}
+    filament_overrides: dict[str, str] = {}
+    options_summary: dict[str, Any] | None = None
     warnings: list[str] = []
 
-    if not overrides:
+    if options is not None:
+        options_summary = options.resolved()
+        overrides.update(options.process_overrides())
+        filament_overrides = options.filament_overrides()
+
+    if not overrides and not filament_overrides:
         return PreparedProfiles(
             machine=machine,
             process=process,
             filament=filaments,
             datadir=datadir,
+            options=options_summary,
             warnings=warnings,
         )
 
-    vendor_dir, bundle = _vendor_root(machine)
+    try:
+        vendor_dir, bundle = _vendor_root(machine)
+    except ConfigError:
+        return _prepare_standalone(
+            machine=machine,
+            process=process,
+            filaments=filaments,
+            datadir=datadir,
+            overrides=overrides,
+            filament_overrides=filament_overrides,
+            options=options_summary,
+            workdir=workdir,
+            warnings=warnings,
+        )
     source_root = datadir or vendor_dir.parent.parent
     copy_root = workdir / "datadir"
     vendor_copy = copy_root / "system" / vendor_dir.name
@@ -269,11 +532,19 @@ def prepare_profiles(target: TargetSettings, workdir: Path) -> PreparedProfiles:
     process_copy = vendor_copy / "process" / process.name
     filament_copy = [vendor_copy / "filament" / item.name for item in filaments]
 
-    data = json.loads(process_copy.read_text(encoding="utf-8-sig"))
-    data.update(overrides)
-    process_copy.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    if overrides:
+        data = json.loads(process_copy.read_text(encoding="utf-8-sig"))
+        data.update(overrides)
+        process_copy.write_text(
+            json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+        )
+    if filament_overrides:
+        for item in filament_copy:
+            data = json.loads(item.read_text(encoding="utf-8-sig"))
+            data.update(filament_overrides)
+            item.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     warnings.append(
-        "overrides were written to a private copy of the vendor profiles; "
+        "process/material overrides were written to a private copy of the vendor profiles; "
         f"the installed profiles stay untouched ({source_root})"
     )
     return PreparedProfiles(
@@ -282,6 +553,8 @@ def prepare_profiles(target: TargetSettings, workdir: Path) -> PreparedProfiles:
         filament=filament_copy,
         datadir=copy_root,
         overrides=overrides,
+        filament_overrides=filament_overrides,
+        options=options_summary,
         warnings=warnings,
     )
 
@@ -458,6 +731,7 @@ def slice_stl(
     *,
     timeout_s: float | None = None,
     slicer_path: str | None = None,
+    options: SliceOptions | None = None,
 ) -> SliceResult:
     """Slice ``stl`` with ``target`` and return G-code plus real statistics."""
     stl = Path(stl)
@@ -486,7 +760,7 @@ def slice_stl(
         )
 
     workdir.mkdir(parents=True, exist_ok=True)
-    prepared = prepare_profiles(target, workdir)
+    prepared = prepare_profiles(target, workdir, options)
     outdir = workdir / "output"
     outdir.mkdir(parents=True, exist_ok=True)
     budget = float(timeout_s or target.timeout_s or DEFAULT_TIMEOUT_S)
@@ -653,6 +927,7 @@ class SliceStore:
         result: SliceResult,
         slicer: SlicerInfo,
         prepared: PreparedProfiles | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         resolved = prepared or result.prepared
         if resolved is None:
@@ -667,6 +942,7 @@ class SliceStore:
             "printer_model": target.printer_model,
             "slicer": slicer.to_dict(),
             "profiles": resolved.to_dict(),
+            "options": options if options is not None else resolved.options,
             "command": result.command,
             "ok": result.ok,
             "exit_code": result.exit_code,

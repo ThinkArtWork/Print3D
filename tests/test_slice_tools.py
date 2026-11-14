@@ -185,3 +185,78 @@ def test_slice_run_records_a_failure(workspace, tmp_path, monkeypatch) -> None:
     finally:
         if runtime.runner is not None:
             runtime.runner.shutdown(wait=False)
+
+
+def test_slice_plan_previews_material_and_process_options(workspace, tmp_path) -> None:
+    _configure(workspace, tmp_path)
+    runtime = Runtime.create(workspace=workspace)
+    asset_id, revision = _built_asset(runtime, tmp_path)
+    payload = _call(
+        runtime,
+        "slice_plan",
+        {
+            "asset_id": asset_id,
+            "target": "a1",
+            "material": "petg",
+            "layer_height": 0.24,
+            "infill": "gyroid",
+            "infill_density": 30,
+            "strength": "strong",
+        },
+    )
+    assert payload["ok"] is True
+    assert payload["writes_performed"] is False
+    assert payload["revision"] == revision
+    assert payload["options"]["material"] == "PETG"
+    assert payload["options"]["nozzle_temp"] == 240
+    assert payload["options"]["bed_temp"] == 80
+    assert payload["options"]["walls"] == 4
+    assert payload["profile_overrides"]["process"]["layer_height"] == "0.24"
+    assert payload["profile_overrides"]["filament"]["temperature"] == "240"
+    assert any("private copy" in item for item in payload["warnings"])
+    assert not (workspace.slices_dir / "plan" / "output").exists()
+
+
+def test_slice_plan_rejects_an_unknown_material(workspace, tmp_path) -> None:
+    _configure(workspace, tmp_path)
+    runtime = Runtime.create(workspace=workspace)
+    asset_id, _ = _built_asset(runtime, tmp_path)
+    payload = _call(
+        runtime,
+        "slice_plan",
+        {"asset_id": asset_id, "target": "a1", "material": "unobtainium"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "material" in payload["error"]["message"].lower()
+
+
+def test_slice_run_records_the_requested_options(workspace, tmp_path) -> None:
+    _configure(workspace, tmp_path)
+    runtime = Runtime.create(workspace=workspace)
+    asset_id, revision = _built_asset(runtime, tmp_path)
+    payload = _call(
+        runtime,
+        "slice_run",
+        {
+            "asset_id": asset_id,
+            "target": "a1",
+            "revision": revision,
+            "confirm": f"SLICE {asset_id} a1",
+            "material": "PETG",
+            "layer_height": 0.24,
+            "infill": "gyroid",
+            "infill_density": 30,
+            "strength": "strong",
+        },
+    )
+    assert payload["ok"] is True
+    job = _wait(runtime, payload["job_id"])
+    assert job["job"]["state"] == "succeeded", job
+
+    inspected = _call(runtime, "slice_inspect", {"slice_id": payload["slice_id"]})
+    record = inspected["slice"]
+    assert record["options"]["material"] == "PETG"
+    assert record["options"]["layer_height"] == 0.24
+    assert record["profiles"]["options"]["bed_temp"] == 80
+    assert record["profiles"]["filament_overrides"]["temperature"] == "240"

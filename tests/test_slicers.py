@@ -12,6 +12,7 @@ from tests.stl_helpers import write_stl
 from xprint.config import TargetSettings
 from xprint.errors import ConfigError, InvalidArgument
 from xprint.slicers import (
+    SliceOptions,
     SliceStore,
     build_command,
     find_slicer,
@@ -288,3 +289,102 @@ def test_slice_store_round_trip(workspace, tmp_path: Path) -> None:
     store.save(record)
     assert store.load(record["slice_id"])["target"] == "a1"
     assert store.record_path(record["slice_id"]).is_file()
+
+
+def test_slice_options_resolve_material_strength_and_process_keys() -> None:
+    options = SliceOptions(
+        material="petg",
+        layer_height=0.24,
+        infill="gyroid",
+        infill_density=30,
+        strength="strong",
+    )
+    resolved = options.resolved()
+    assert resolved["material"] == "PETG"
+    assert resolved["nozzle_temp"] == 240
+    assert resolved["bed_temp"] == 80
+    assert (resolved["walls"], resolved["top_shells"], resolved["bottom_shells"]) == (4, 5, 4)
+    assert options.process_overrides() == {
+        "layer_height": "0.24",
+        "sparse_infill_pattern": "gyroid",
+        "sparse_infill_density": "30%",
+        "wall_loops": "4",
+        "top_shell_layers": "5",
+        "bottom_shell_layers": "4",
+    }
+    filament = options.filament_overrides()
+    assert filament["filament_type"] == "PETG"
+    assert filament["nozzle_temperature"] == "240"
+    assert filament["nozzle_temperature_initial_layer"] == "240"
+    assert filament["hot_plate_temp"] == "80"
+    assert filament["bed_temperature"] == "80"
+
+
+def test_slice_options_validate_ranges_and_names() -> None:
+    with pytest.raises(InvalidArgument):
+        SliceOptions(material="unobtainium").resolved()
+    with pytest.raises(InvalidArgument):
+        SliceOptions(layer_height=2).resolved()
+    with pytest.raises(InvalidArgument):
+        SliceOptions(infill="spiral").resolved()
+    with pytest.raises(InvalidArgument):
+        SliceOptions(walls=99).resolved()
+    with pytest.raises(InvalidArgument):
+        SliceOptions(nozzle_temp=500).resolved()
+    # Unknown materials are allowed when the caller supplies temperatures.
+    resolved = SliceOptions(material="PEEK", nozzle_temp=340, bed_temp=120).resolved()
+    assert resolved["nozzle_temp"] == 340
+
+
+def test_prepare_profiles_writes_options_to_a_private_copy(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    options = SliceOptions(
+        material="PETG", layer_height=0.24, infill="gyroid", infill_density=30, strength="strong"
+    )
+    prepared = prepare_profiles(target, tmp_path / "work", options)
+
+    process = json.loads(prepared.process.read_text(encoding="utf-8"))
+    filament = json.loads(prepared.filament[0].read_text(encoding="utf-8"))
+    assert process["layer_height"] == "0.24"
+    assert process["sparse_infill_pattern"] == "gyroid"
+    assert process["sparse_infill_density"] == "30%"
+    assert process["wall_loops"] == "4"
+    assert filament["nozzle_temperature"] == "240"
+    assert filament["hot_plate_temp"] == "80"
+    assert filament["bed_temperature"] == "80"
+    assert prepared.datadir == tmp_path / "work" / "datadir"
+    assert prepared.options and prepared.options["material"] == "PETG"
+
+    # The installed vendor presets are untouched.
+    original = json.loads(Path(target.process).read_text(encoding="utf-8"))
+    assert original["layer_height"] == "0.2"
+
+
+def test_prepare_profiles_supports_flattened_presets(tmp_path: Path) -> None:
+    folder = tmp_path / "flat"
+    folder.mkdir()
+    machine = folder / "machine.json"
+    process = folder / "process.json"
+    filament = folder / "filament.json"
+    machine.write_text(json.dumps({"printer_model": "Flat U1"}), encoding="utf-8")
+    process.write_text(json.dumps({"layer_height": "0.2"}), encoding="utf-8")
+    filament.write_text(json.dumps({"nozzle_temperature": "220"}), encoding="utf-8")
+    target = TargetSettings(
+        printer_model="Flat U1",
+        slicer="orca",
+        slicer_path=str(_fake_slicer(tmp_path)),
+        machine=str(machine),
+        process=str(process),
+        filament=[str(filament)],
+        timeout_s=30,
+    )
+    prepared = prepare_profiles(
+        target, tmp_path / "work", SliceOptions(material="PETG", layer_height=0.24)
+    )
+    assert prepared.machine == machine  # machine presets are never modified
+    assert prepared.process.parent == tmp_path / "work" / "profiles"
+    patched = json.loads(prepared.process.read_text(encoding="utf-8"))
+    assert patched["layer_height"] == "0.24"
+    patched_filament = json.loads(prepared.filament[0].read_text(encoding="utf-8"))
+    assert patched_filament["nozzle_temperature"] == "240"
+    assert json.loads(process.read_text(encoding="utf-8"))["layer_height"] == "0.2"
