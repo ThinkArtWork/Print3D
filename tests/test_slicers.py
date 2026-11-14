@@ -497,6 +497,75 @@ def test_trim_unused_tool_macros_keeps_only_used_heads(tmp_path: Path) -> None:
     assert "G1 X1 Y1 E1" in lines
 
 
+def test_trim_unused_tool_macros_calibrates_a_shared_head_once(tmp_path: Path) -> None:
+    gcode = tmp_path / "plate.gcode"
+    gcode.write_text(
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=2\n"
+        "G1 X1 Y1 E1\n",
+        encoding="utf-8",
+    )
+    # Single-nozzle AMS: three material slots share physical toolhead 0.
+    info = trim_unused_tool_macros(
+        gcode,
+        used_tools=[0, 1, 2],
+        flow_calibration={
+            "trim_unused_tools": True,
+            "tool_macros": ["SM_PRINT_FLOW_CALIBRATE"],
+        },
+        slots=[{"toolhead": 0}, {"toolhead": 0}, {"toolhead": 0}],
+    )
+    assert info["physical_toolheads"] == [0]
+    assert info["kept_tools"] == [0]
+    assert info["removed_lines"] == 2
+    lines = gcode.read_text(encoding="utf-8").splitlines()
+    assert "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0" in lines
+    assert not any("EXTRUDER=1" in line or "EXTRUDER=2" in line for line in lines)
+
+
+def test_trim_unused_tool_macros_keeps_each_multi_head_tool(tmp_path: Path) -> None:
+    gcode = tmp_path / "plate.gcode"
+    gcode.write_text(
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=2\n",
+        encoding="utf-8",
+    )
+    info = trim_unused_tool_macros(
+        gcode,
+        used_tools=[0, 1, 2],
+        flow_calibration={
+            "trim_unused_tools": True,
+            "tool_macros": ["SM_PRINT_FLOW_CALIBRATE"],
+        },
+        slots=[{"toolhead": 0}, {"toolhead": 1}, {"toolhead": 2}],
+    )
+    assert info["physical_toolheads"] == [0, 1, 2]
+    assert info["removed_lines"] == 0
+
+
+def test_trim_unused_tool_macros_dedupes_a_single_toolhead(tmp_path: Path) -> None:
+    gcode = tmp_path / "plate.gcode"
+    gcode.write_text(
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=0\n"
+        "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n",
+        encoding="utf-8",
+    )
+    info = trim_unused_tool_macros(
+        gcode,
+        used_tools=[0, 1],
+        flow_calibration={
+            "trim_unused_tools": True,
+            "tool_macros": ["SM_PRINT_FLOW_CALIBRATE"],
+        },
+        toolhead_count=1,
+    )
+    assert info["physical_toolheads"] == [0]
+    assert info["kept_tools"] == [0]
+    assert info["removed_lines"] == 1
+
+
 def test_trim_unused_tool_macros_is_opt_in(tmp_path: Path) -> None:
     gcode = tmp_path / "plate.gcode"
     original = "SM_PRINT_FLOW_CALIBRATE EXTRUDER=1\n"

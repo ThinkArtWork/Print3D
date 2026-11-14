@@ -2111,6 +2111,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     slicer_path=configured.slicer_path,
                     options=options,
                     flow_calibration=printer_cfg.flow_calibration if printer_cfg else None,
+                    slots=printer_cfg.slots if printer_cfg else None,
+                    toolhead_count=printer_cfg.toolheads if printer_cfg else None,
                 )
                 record = SliceStore(rt.workspace).save_result(
                     slice_id=slice_id,

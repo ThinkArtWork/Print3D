@@ -820,6 +820,8 @@ def trim_unused_tool_macros(
     *,
     used_tools: list[int] | None,
     flow_calibration: dict[str, Any] | None,
+    slots: list[dict[str, Any]] | None = None,
+    toolhead_count: int | None = None,
 ) -> dict[str, Any]:
     """Drop start-macro lines that heat/feed/calibrate unused toolheads.
 
@@ -839,12 +841,25 @@ def trim_unused_tool_macros(
     if not used:
         return {"enabled": False, "removed_lines": 0, "reason": "no used toolheads detected"}
 
+    # Slots are positional (G-code tool order).  A single-nozzle AMS machine
+    # exposes several materials on one physical toolhead; calibrating that head
+    # once is enough, and Orca/Bambu apply the per-filament K on each switch.
+    physical: dict[int, int] = {}
+    for tool in sorted(used):
+        head = 0 if toolhead_count == 1 else tool
+        if toolhead_count != 1 and slots and 0 <= tool < len(slots):
+            value = slots[tool].get("toolhead") if isinstance(slots[tool], dict) else None
+            if value is not None:
+                head = int(value)
+        physical.setdefault(head, tool)
+    keep = set(physical.values())
+
     data = path.read_bytes()
     kept: list[bytes] = []
     removed: list[str] = []
     for line in data.splitlines(keepends=True):
         match = _TOOL_MACRO_RE.match(line.decode("utf-8", errors="ignore"))
-        if match and match.group(1).upper() in macros and int(match.group(2)) not in used:
+        if match and match.group(1).upper() in macros and int(match.group(2)) not in keep:
             removed.append(match.group(0).strip())
             continue
         kept.append(line)
@@ -854,6 +869,8 @@ def trim_unused_tool_macros(
         "enabled": True,
         "macros": sorted(macros),
         "used_tools": sorted(used),
+        "physical_toolheads": sorted(physical),
+        "kept_tools": sorted(keep),
         "removed_lines": len(removed),
         "removed": removed[:12],
     }
@@ -956,6 +973,8 @@ def slice_stl(
     slicer_path: str | None = None,
     options: SliceOptions | None = None,
     flow_calibration: dict[str, Any] | None = None,
+    slots: list[dict[str, Any]] | None = None,
+    toolhead_count: int | None = None,
 ) -> SliceResult:
     """Slice ``stl`` with ``target`` and return G-code plus real statistics."""
     stl = Path(stl)
@@ -1056,7 +1075,11 @@ def slice_stl(
     gcode = gcodes[-1]
     metadata = parse_gcode(gcode)
     trim = trim_unused_tool_macros(
-        gcode, used_tools=metadata.get("toolheads"), flow_calibration=flow_calibration
+        gcode,
+        used_tools=metadata.get("toolheads"),
+        flow_calibration=flow_calibration,
+        slots=slots,
+        toolhead_count=toolhead_count,
     )
     metadata["tool_macro_trim"] = trim
     if trim.get("removed_lines"):

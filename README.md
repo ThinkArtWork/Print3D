@@ -393,6 +393,11 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
 
 `trim_unused_tools` + `tool_macros` 用于多头机器：切片完成后，XPrint 扫描起始 G-code，把 `EXTRUDER=n` 且 n 不在本次使用工具头里的预热/进料/校准行删掉。例如 U1 只用到 T0 时，G-code 里只保留 T0 的预热/进料/校准行。注意：U1 的启动总时长主要花在床网、喷嘴清洁和预热上；实测裁剪前后总启动都约 5.5 分钟，因此这项优化在 U1 上收益有限，但在“每个头都要实际进料校准”的机器上会明显。它是可选的文本级后处理，只匹配配置里列出的宏名，不会改动模型路径或挤出段；不配置则保持厂商原始行为。
 
+多色语义：校准按**物理工具头**去重。
+- 多工具头机器（U1，`toolheads` > 1）：打印用到 T0/T1/T2 三种颜色，就分别校准这 3 个物理头。
+- 单喷嘴多色（AMS/换料，`toolheads: 1`）：无论用 1 种还是 3 种颜色，只校准该喷嘴一次；即使切片 G-code 里出现 T0/T1/T2，也不会对同一物理头重复校准。`slots` 里的 `toolhead` 字段可显式声明“哪个槽位属于哪个物理头”，不填时按单头自动归并。
+- 这不是 XPrint 自创的规则：Orca/Bambu 在单色打印启动时校准，在多色打印中改用每种耗材已保存的 K 值，在换料时切换（[OrcaSlicer 文案](https://github.com/OrcaSlicer/OrcaSlicer/blob/3b58217b47fdbea46db7abc2c6b16c3b3f4364a2/localization/i18n/en/OrcaSlicer_en.po#27)、[Bambu 流量动力学校准](https://www.orcaslicer.com/wiki/calibration/adaptive_pressure_advance_calib)）。因此同一喷嘴按颜色重复跑启动校准既慢又没有额外收益。
+
 | 适配器 / 机型 | 切片参数 | 槽位匹配 | 板型选择 | 自动读板型 | 校准命令 | 读校准系数 |
 | --- | --- | --- | --- | --- | --- | --- |
 | Moonraker / Klipper（含 U1） | ✅ | ✅（配置 `slots`） | ✅（`build_plates` 限制） | 视固件字段（`plate_keys`）；U1 无 | ✅ 任意 G-code（`enable_gcode`） | ✅ 任意 JSON（`factors_url`） |
