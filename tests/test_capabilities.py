@@ -71,3 +71,57 @@ def test_system_status(workspace) -> None:
         "slicer",
         "printer",
     }
+
+
+def test_cad_reports_the_build123d_worker(workspace) -> None:
+    import importlib.util
+
+    loaded, secrets = load_all()
+    cad = build_capabilities(loaded, secrets, builtin_registry())["cad"]
+    if importlib.util.find_spec("build123d") is None:
+        assert cad["available"] is False
+        assert "build123d" in cad["reason"]
+        assert "uv pip install" in cad["hint"]
+    else:
+        assert cad["available"] is True
+        assert cad["build123d"]
+        assert cad["worker"].endswith("cad_worker.py")
+        assert cad["reason"] is None
+
+
+def test_cad_reports_a_missing_build123d(workspace, monkeypatch) -> None:
+    from print3d import capabilities
+
+    monkeypatch.setattr(
+        capabilities, "_build123d_version", lambda python: (None, "current interpreter")
+    )
+    loaded, secrets = load_all()
+    cad = build_capabilities(loaded, secrets, builtin_registry())["cad"]
+    assert cad["available"] is False
+    assert cad["reason"] == "build123d is not installed in current interpreter"
+    assert "uv pip install" in cad["hint"]
+
+
+def test_render_reports_the_blender_executable(workspace, monkeypatch) -> None:
+    from pathlib import Path
+
+    monkeypatch.setattr("print3d.blender.find_blender", lambda explicit=None: Path("/opt/Blender"))
+    loaded, secrets = load_all()
+    render = build_capabilities(loaded, secrets, builtin_registry())["render"]
+    assert render["available"] is True
+    assert render["executable"] == "/opt/Blender"
+    assert render["reason"] is None
+
+
+def test_render_reports_a_bad_blender_path(workspace, monkeypatch) -> None:
+    from print3d.errors import InvalidArgument
+
+    def refuse(explicit=None):
+        raise InvalidArgument("Blender not found at /nope", hint="Set render.blender_path.")
+
+    monkeypatch.setattr("print3d.blender.find_blender", refuse)
+    loaded, secrets = load_all()
+    render = build_capabilities(loaded, secrets, builtin_registry())["render"]
+    assert render["available"] is False
+    assert "not found" in render["reason"]
+    assert render["hint"] == "Set render.blender_path."

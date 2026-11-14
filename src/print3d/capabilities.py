@@ -8,10 +8,12 @@ install instead of guessing.
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -120,6 +122,40 @@ def probe_images(cfg: LoadedConfig, secrets: Secrets) -> list[dict[str, Any]]:
     return entries
 
 
+_BUILD123D_PROBE = "import importlib.metadata as m; print(m.version('build123d'))"
+
+
+def _build123d_version(python: str | None) -> tuple[str | None, str]:
+    """Return the build123d version in the CAD interpreter and where it was read.
+
+    The default is the interpreter running 3DPrint; ``cad.python`` can point at a
+    separate environment, in which case the version is read in a subprocess with
+    the same scrubbed environment the worker will get.
+    """
+
+    if not python:
+        try:
+            version = importlib.metadata.version("build123d")
+        except importlib.metadata.PackageNotFoundError:
+            return None, "current interpreter"
+        return version, "current interpreter"
+    try:
+        from .cad import clean_env
+
+        completed = subprocess.run(
+            [python, "-I", "-c", _BUILD123D_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=clean_env(),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, f"cad.python={python}"
+    version = completed.stdout.strip() if completed.returncode == 0 else ""
+    return (version or None), f"cad.python={python}"
+
+
 def probe_cad(cfg: LoadedConfig) -> dict[str, Any]:
     backend = cfg.config.cad.backend
     if backend != "text2cad":
@@ -129,59 +165,62 @@ def probe_cad(cfg: LoadedConfig) -> dict[str, Any]:
             "reason": f"CAD backend {backend!r} has no implementation yet",
             "hint": "Set cad.backend to 'text2cad'.",
         }
-    cad_cli = _which("cad")
+    python = cfg.config.cad.python
+    version, source = _build123d_version(python)
+    worker = Path(__file__).with_name("cad_worker.py")
+    available = bool(version) and worker.is_file()
+    reason = None
+    if not version:
+        reason = f"build123d is not installed in {source}"
+    elif not worker.is_file():
+        reason = f"cad_worker.py is missing next to {Path(__file__).name}"
     return {
         "backend": backend,
-        "available": cad_cli is not None,
-        "executable": cad_cli,
-        "expected_version": cfg.config.cad.cad_server_version,
-        "reason": None if cad_cli else "The `cad` CLI (text-to-cad) is not on PATH",
+        "available": available,
+        "interpreter": python or sys.executable,
+        "checked_in": source,
+        "build123d": version,
+        "worker": str(worker) if worker.is_file() else None,
+        "reason": reason,
         "hint": None
-        if cad_cli
-        else "Install text-to-cad in its own environment: `pip install cad-server` "
-        "(see docs/ASSETS.md); 3DPrint only calls it as an external process.",
+        if available
+        else 'Install build123d in the CAD interpreter: `uv pip install "build123d>=0.9"`, '
+        "or set cad.python to an interpreter that has it.",
     }
 
 
 def probe_render(cfg: LoadedConfig) -> dict[str, Any]:
-    backend = cfg.config.render.backend
-    blender_path = cfg.config.render.blender_path
-    bpy_spec = importlib.util.find_spec("bpy") is not None
+    """Report whether ``blender_run`` can start.
 
-    if backend == "blender_bpy":
-        cad_cli = _which("cad")
-        available = bpy_spec or cad_cli is not None
-        reason = None
-        if not available:
-            reason = "bpy is not importable and the `cad` CLI is missing"
-        return {
-            "backend": backend,
-            "available": available,
-            "bpy_importable": bpy_spec,
-            "cad_cli": cad_cli,
-            "reason": reason,
-            "hint": None
-            if available
-            else "Install text-to-cad (provides bpy) or set render.backend to "
-            "'blender_app' with render.blender_path.",
-        }
-    if backend == "blender_app":
-        path = blender_path or _which("blender")
-        available = bool(path) and _exists(path)
-        return {
-            "backend": backend,
-            "available": available,
-            "executable": path,
-            "reason": None if available else "Blender application not found",
-            "hint": None
-            if available
-            else "Set render.blender_path to the Blender executable, or install Blender.",
-        }
+    ``blender_run`` always launches the Blender application (``find_blender``);
+    ``render.backend`` is only a label kept for configuration compatibility, so
+    availability is decided by the executable, not by the backend name.
+    """
+
+    from .blender import find_blender
+    from .errors import InvalidArgument
+
+    backend = cfg.config.render.backend
+    try:
+        found = find_blender(cfg.config.render.blender_path)
+    except InvalidArgument as exc:
+        found = None
+        reason = str(exc)
+        hint = exc.hint
+    else:
+        reason = None if found else "Blender application not found"
+        hint = (
+            None
+            if found
+            else "Install Blender, or set render.blender_path to the Blender executable."
+        )
     return {
         "backend": backend,
-        "available": False,
-        "reason": f"Render backend {backend!r} has no implementation yet",
-        "hint": "Use 'blender_bpy' or 'blender_app'.",
+        "available": found is not None,
+        "executable": str(found) if found else None,
+        "bpy_importable": importlib.util.find_spec("bpy") is not None,
+        "reason": reason,
+        "hint": hint,
     }
 
 
