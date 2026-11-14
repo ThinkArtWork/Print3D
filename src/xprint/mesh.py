@@ -15,6 +15,11 @@ import numpy as np
 from .preview import load_stl
 
 
+def _num(value) -> float:
+    """Round a float and normalise -0.0, which JSON cannot round-trip."""
+    return round(float(value), 3) + 0.0
+
+
 def mesh_stats(triangles: np.ndarray) -> dict[str, Any]:
     """Summarise a triangle soup: bbox, volume, area and watertightness."""
 
@@ -51,12 +56,12 @@ def mesh_stats(triangles: np.ndarray) -> dict[str, Any]:
     return {
         "triangles": int(len(tris)),
         "vertices": int(len(np.unique(quantised, axis=0))),
-        "bbox_mm": [round(float(value), 3) for value in size],
-        "bbox_min_mm": [round(float(value), 3) for value in bbox_min],
-        "bbox_max_mm": [round(float(value), 3) for value in bbox_max],
-        "volume_mm3": round(volume, 3),
-        "volume_cm3": round(volume / 1000.0, 3),
-        "area_mm2": round(area, 3),
+        "bbox_mm": [_num(value) for value in size],
+        "bbox_min_mm": [_num(value) for value in bbox_min],
+        "bbox_max_mm": [_num(value) for value in bbox_max],
+        "volume_mm3": _num(volume),
+        "volume_cm3": _num(volume / 1000.0),
+        "area_mm2": _num(area),
         "boundary_edges": boundary,
         "nonmanifold_edges": nonmanifold,
         "watertight": boundary == 0 and nonmanifold == 0,

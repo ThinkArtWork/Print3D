@@ -84,7 +84,10 @@ def test_overhang_and_support_estimate() -> None:
     assert metrics["bbox_mm"] == [20.0, 20.0, 4.0]
     assert metrics["overhang_area_mm2"] > 300.0
     assert metrics["support_estimate_mm3"] > 0.0
+    assert metrics["support_ratio"] > 0.05
     assert metrics["max_overhang_height_mm"] > 0.0
+    report = printability_report(triangles, normals, areas)
+    assert any(item["code"] == "overhang" for item in report["issues"])
 
 
 def test_bed_overflow_is_an_error() -> None:

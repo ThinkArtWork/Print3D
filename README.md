@@ -275,7 +275,10 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
 | `infill_density` | 填充密度 %，0–100；`-1` 表示沿用预设 |
 | `strength` | `light` / `normal` / `strong`，映射墙数 2/3/4、顶/底层 3/4/5；也可单独传 `walls`、`top_shells`、`bottom_shells` |
 | `bed_temp` / `nozzle_temp` | 显式覆盖材料默认温度 |
+| `build_plate` | 打印板类型：`textured_pei`（默认纹理 PEI）/ `smooth_pei`（光面 PEI，Orca 里叫 High Temp Plate）/ `cool_plate` / `engineering_plate` / `supertack` / `textured_cool`；选择后 Orca 用对应的热床温度键，温度按材料自动调整 |
+| `printer` + `slot` | 绑定某台打印机的耗材槽（多喷头按工具头、单喷头 AMS 按槽位）：自动取该槽的材质/颜色，材质冲突直接拒绝；`slot=1` 表示 G-code 用 `T1` |
 
+- 打印板温度：`textured_pei` / `smooth_pei` 按材料温度；`cool_plate`、`textured_cool` 各降 15 °C，`engineering_plate` 升 10 °C，`supertack` 降 5 °C。对应到 Orca 的 `curr_bed_type` 和 `*_plate_temp` 键，不再把所有板型的温度键写成同一个值。
 - `overrides` 与上述参数通过复制 vendor 预设到私有 datadir、改写 process/filament JSON 实现；用户安装的 profile 不动。独立扁平 profile（如 U1）则复制到本次切片工作目录的 `profiles/` 后改写。
 - `slice_plan` 只预览 `profile_overrides`，不写文件；`slice_run` 的 `slice_inspect` 记录里保留本次 `options`。
 - G-code 头与 `*.statistics.json` 双源读取；与目标 `printer_model` 不符、超出 bed 都会写 warning。
@@ -296,6 +299,12 @@ slice_run(asset_id, "a1", confirm="SLICE <asset_id> a1",
       "base_url": "http://192.168.1.50:7125",
       "model": "Snapmaker U1",
       "toolheads": 4,
+      "slots": [
+        {"material": "PLA", "color": "#8C9099", "name": "Matte Grey"},
+        {"material": "PLA", "color": "#000000", "name": "Matte Black"},
+        {"material": "PETG", "color": "#FFFFFF"}
+      ],
+      "build_plate": "textured_pei",
       "api_key_env": "MOONRAKER_API_KEY",
       "timeout_s": 30
     }
@@ -336,7 +345,9 @@ printer_cancel("u1", confirm="CANCEL PRINT u1")
   }
 }
 ```
-- 工具头：`toolheads` 支持 1–9（拓竹 X3D 类机型最多 9 个）。`send` 会读切片 G-code 里的 `T0..Tn`，实际用到的工具号超过打印机配置就拒绝上传并提示调大 `toolheads`。Snapmaker U1 是 4 头。
+- 工具头与耗材：`toolheads` 支持 1–9（拓竹 X3D 类机型最多 9 个）。`slots` 按 G-code 工具顺序描述每个槽的 `material` / `color`（`#RRGGBB`）/ `name`；多喷头按工具头编号，单喷头 AMS（如拓竹 AMS）按槽位编号。
+- 切片时传 `printer="u1", slot=1`：自动取 1 号槽的材质，生成 `T1`，并把该槽材质写进 slice 记录；材质与请求冲突会直接报错。`send` 再按 G-code 实际用到的 `Tn` 逐槽核对材质，不匹配就拒绝上传；没有 `slots` 时给出“无法核对材质”的 warning，但仍会检查 `toolheads` 上限。
+- 打印板：`printer_save(build_plate="pei")` 存到打印机配置，之后切片不传 `build_plate` 也会自动使用该板型；也可每次切片单独覆盖。U1 固件（Klipper `print_task_config` / `_DETECT_PLATE`）只报告耗材和探测偏移，**不上报板型**，所以首次需要用户选一次；Snapmaker U1 默认纹理 PEI。
 - 真机（2026-11-14）：Snapmaker U1，Moonraker 2.1.0，`http://192.168.1.50:7125`，4 × 0.4 mm 工具头；`printer_save` 接入后 `printer_status` 为 `standby`；OrcaSlicer 2.5.0 切片 25 层 / 311 s / 1.99 g，`send(start=false)` 上传 277,876 B 成功；随后 `send(start=true)` 真实打印完成：`complete`，25/25 层，325 s，662 mm 耗材。
 - 已知限制：Snapmaker Orca 2.4.1 的 CLI 加载 U1 预设会段错误（GUI 不受影响）；当前用 upstream OrcaSlicer 2.5.0 + 扁平化 U1 预设（去掉 `inherits`，并把 `{if chamber_cooling_mode}` 这类厂商占位符展开成固定分支）绕开。预设放在工作区 `profiles/u1/`，目标配置指向它们。
 - 发送前检查：slice 必须成功、G-code 存在、打印机 idle、`printer_model` 与切片目标一致，任一不满足直接拒绝。

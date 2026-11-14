@@ -360,6 +360,24 @@ def test_prepare_profiles_writes_options_to_a_private_copy(tmp_path: Path) -> No
     assert original["layer_height"] == "0.2"
 
 
+def test_prepare_profiles_expands_filaments_and_pins_a_toolhead(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    prepared = prepare_profiles(target, tmp_path / "work", SliceOptions(toolhead=2))
+
+    assert prepared.toolhead == 2
+    assert len(prepared.filament) == 3
+    assert all(path.is_file() for path in prepared.filament)
+    command = build_command(
+        Path(target.slicer_path),
+        prepared,
+        stl=Path("/tmp/model.stl"),
+        outdir=tmp_path / "out",
+        supports_statistics=True,
+    )
+    index = command.index("--load-filament-ids")
+    assert command[index + 1] == "3"
+
+
 def test_prepare_profiles_supports_flattened_presets(tmp_path: Path) -> None:
     folder = tmp_path / "flat"
     folder.mkdir()
@@ -388,3 +406,23 @@ def test_prepare_profiles_supports_flattened_presets(tmp_path: Path) -> None:
     patched_filament = json.loads(prepared.filament[0].read_text(encoding="utf-8"))
     assert patched_filament["nozzle_temperature"] == "240"
     assert json.loads(process.read_text(encoding="utf-8"))["layer_height"] == "0.2"
+
+
+def test_build_plate_selects_one_orca_bed_key() -> None:
+    options = SliceOptions(material="PLA", build_plate="cool")
+    resolved = options.resolved()
+    assert resolved["build_plate"] == "cool_plate"
+    assert resolved["bed_temp"] == 45
+    assert options.process_overrides()["curr_bed_type"] == "Cool Plate"
+    filament = options.filament_overrides()
+    assert filament["cool_plate_temp"] == "45"
+    assert filament["cool_plate_temp_initial_layer"] == "45"
+    assert "hot_plate_temp" not in filament
+
+    textured = SliceOptions(material="PETG", build_plate="pei")
+    assert textured.resolved()["bed_temp"] == 80
+    assert textured.process_overrides()["curr_bed_type"] == "Textured PEI Plate"
+    assert textured.filament_overrides()["textured_plate_temp"] == "80"
+
+    with pytest.raises(InvalidArgument, match="Unknown build plate"):
+        SliceOptions(material="PLA", build_plate="cardboard").resolved()

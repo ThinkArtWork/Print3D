@@ -71,6 +71,7 @@ class PrinterState:
     progress: float | None = None
     bed_temp: float | None = None
     nozzle_temp: float | None = None
+    build_plate: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -88,6 +89,48 @@ class PrinterState:
             "bed_temp": self.bed_temp,
             "nozzle_temp": self.nozzle_temp,
         }
+
+
+SLOT_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def normalise_slots(slots: list[dict[str, Any]] | None, *, toolheads: int) -> list[dict[str, Any]]:
+    """Validate the per-slot material/colour table for a printer."""
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(slots or []):
+        if not isinstance(raw, dict):
+            raise InvalidArgument(f"slots[{index}] must be an object")
+        material = str(raw.get("material") or "").strip().upper()
+        color = str(raw.get("color") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        if color and not SLOT_COLOR_RE.match(color):
+            raise InvalidArgument(
+                f"slots[{index}].color must look like #RRGGBB",
+                details={"value": color},
+            )
+        toolhead = raw.get("toolhead")
+        if toolhead is not None:
+            try:
+                toolhead = int(toolhead)
+            except (TypeError, ValueError):
+                raise InvalidArgument(f"slots[{index}].toolhead must be an integer") from None
+            if not 0 <= toolhead < toolheads:
+                raise InvalidArgument(
+                    f"slots[{index}].toolhead must be between 0 and {toolheads - 1}"
+                )
+        item: dict[str, Any] = {}
+        if material:
+            item["material"] = material
+        if color:
+            item["color"] = color.upper()
+        if name:
+            item["name"] = name
+        if toolhead is not None:
+            item["toolhead"] = toolhead
+        out.append(item)
+    if len(out) > 16:
+        raise InvalidArgument("at most 16 filament slots are supported")
+    return out
 
 
 def validate_printer_id(value: str) -> str:
@@ -198,6 +241,7 @@ class MoonrakerPrinter(_HttpPrinter):
                 "heater_bed": "",
                 "extruder": "",
                 "virtual_sdcard": "",
+                "print_task_config": "",
             },
         )
         payload = self._json(response)
@@ -207,6 +251,13 @@ class MoonrakerPrinter(_HttpPrinter):
         bed = status.get("heater_bed") or {}
         nozzle = status.get("extruder") or {}
         state = str(stats.get("state") or "unknown")
+        task = status.get("print_task_config") or {}
+        detected = None
+        for key in ("build_plate", "bed_type", "plate_type", "curr_bed_type"):
+            value = task.get(key)
+            if isinstance(value, str) and value.strip():
+                detected = value.strip()
+                break
         return PrinterState(
             online=True,
             state=state,
@@ -215,7 +266,8 @@ class MoonrakerPrinter(_HttpPrinter):
             progress=float(progress) if isinstance(progress, (int, float)) else None,
             bed_temp=bed.get("temperature"),
             nozzle_temp=nozzle.get("temperature"),
-            raw={"print_stats": stats},
+            build_plate=detected,
+            raw={"print_stats": stats, "print_task_config": task},
         )
 
     def upload(self, path: Path, *, name: str) -> str:

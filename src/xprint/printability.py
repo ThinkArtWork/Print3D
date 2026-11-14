@@ -21,6 +21,11 @@ MAX_RAY_SAMPLES = 320
 _EPS = 1e-6
 
 
+def _num(value) -> float:
+    """Round a float and normalise -0.0, which JSON cannot round-trip."""
+    return round(float(value), 3) + 0.0
+
+
 def mesh_from_stl(path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (triangles Nx3x3, face normals Nx3, areas N)."""
     triangles = np.asarray(load_stl(path), dtype=np.float64).reshape(-1, 3, 3)
@@ -123,16 +128,17 @@ def mesh_metrics(triangles: np.ndarray, normals: np.ndarray, areas: np.ndarray) 
     if volume < 0:
         volume = -volume
     return {
-        "bbox_mm": [round(float(item), 3) for item in bbox],
-        "bbox_min_mm": [round(float(item), 3) for item in bbox_min],
-        "bbox_max_mm": [round(float(item), 3) for item in bbox_max],
-        "volume_mm3": round(volume, 3),
-        "surface_area_mm2": round(total_area, 2),
+        "bbox_mm": [_num(item) for item in bbox],
+        "bbox_min_mm": [_num(item) for item in bbox_min],
+        "bbox_max_mm": [_num(item) for item in bbox_max],
+        "volume_mm3": _num(volume),
+        "surface_area_mm2": round(total_area, 2) + 0.0,
         "triangles": int(len(triangles)),
-        "overhang_area_mm2": round(overhang_area, 2),
+        "overhang_area_mm2": round(overhang_area, 2) + 0.0,
         "overhang_ratio": round(overhang_area / total_area, 4) if total_area else 0.0,
-        "bed_contact_mm2": round(contact_area, 2),
-        "support_estimate_mm3": round(support_volume, 1),
+        "bed_contact_mm2": round(contact_area, 2) + 0.0,
+        "support_estimate_mm3": round(support_volume, 1) + 0.0,
+        "support_ratio": round(support_volume / volume, 4) if volume else 0.0,
         "max_overhang_height_mm": round(float(heights.max()), 2) if len(heights) else 0.0,
     }
 
@@ -240,11 +246,14 @@ def printability_report(
             f"Footprint {bbox[0]:.1f}x{bbox[1]:.1f} mm exceeds the {bed[0]:.0f}x{bed[1]:.0f} mm bed.",
             "Rotate the part or split it; check orientation_plan.",
         )
-    if metrics["overhang_ratio"] > 0.08:
+    if metrics["overhang_ratio"] > 0.08 or metrics["support_ratio"] > 0.05:
         issue(
             "warning",
             "overhang",
-            f"{metrics['overhang_ratio'] * 100:.1f}% of the surface is a >45° overhang.",
+            (
+                f"{metrics['overhang_ratio'] * 100:.1f}% of the surface is a >45° overhang; "
+                f"estimated support volume is {metrics['support_ratio'] * 100:.1f}% of the part."
+            ),
             "Run orientation_plan, add chamfers/teardrops, or plan supports on non-critical faces.",
         )
     if metrics["bed_contact_mm2"] < 100 and bbox[2] > 15:

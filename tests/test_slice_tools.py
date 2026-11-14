@@ -260,3 +260,86 @@ def test_slice_run_records_the_requested_options(workspace, tmp_path) -> None:
     assert record["options"]["layer_height"] == 0.24
     assert record["profiles"]["options"]["bed_temp"] == 80
     assert record["profiles"]["filament_overrides"]["temperature"] == "240"
+
+
+def test_slice_plan_pins_a_printer_slot_and_checks_its_material(workspace, tmp_path) -> None:
+    _configure(workspace, tmp_path)
+    runtime = Runtime.create(workspace=workspace)
+    asset_id, _ = _built_asset(runtime, tmp_path)
+    saved = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "u1",
+            "confirm": "SAVE PRINTER u1",
+            "base_url": "http://printer.local:7125",
+            "toolheads": 4,
+            "slots": [{"material": "PLA"}, {"material": "PETG"}],
+            "build_plate": "pei",
+        },
+    )
+    assert saved["ok"] is True
+
+    plan = _call(
+        runtime,
+        "slice_plan",
+        {"asset_id": asset_id, "target": "a1", "printer": "u1", "slot": 1},
+    )
+    assert plan["ok"] is True
+    assert plan["options"]["material"] == "PETG"
+    assert plan["options"]["toolhead"] == 1
+    assert plan["options"]["build_plate"] == "textured_pei"
+    assert plan["options"]["bed_temp"] == 80
+    assert plan["slot"] == {
+        "slot": 1,
+        "printer": "u1",
+        "material": "PETG",
+        "color": None,
+        "name": None,
+        "configured": True,
+        "build_plate": "textured_pei",
+    }
+
+    mismatch = _call(
+        runtime,
+        "slice_plan",
+        {"asset_id": asset_id, "target": "a1", "printer": "u1", "slot": 1, "material": "PLA"},
+    )
+    assert mismatch["ok"] is False
+    assert mismatch["error"]["code"] == "invalid_argument"
+    assert "holds PETG" in mismatch["error"]["message"]
+
+
+def test_slice_plan_build_plate_selects_the_orca_bed_key(workspace, tmp_path) -> None:
+    _configure(workspace, tmp_path)
+    runtime = Runtime.create(workspace=workspace)
+    asset_id, _ = _built_asset(runtime, tmp_path)
+
+    plan = _call(
+        runtime,
+        "slice_plan",
+        {
+            "asset_id": asset_id,
+            "target": "a1",
+            "material": "PLA",
+            "build_plate": "cool",
+        },
+    )
+    assert plan["ok"] is True
+    assert plan["options"]["build_plate"] == "cool_plate"
+    assert plan["options"]["bed_temp"] == 45
+    assert plan["profile_overrides"]["process"]["curr_bed_type"] == "Cool Plate"
+    compact = {
+        key: value
+        for key, value in plan.items()
+        if key in {"asset_id", "target", "options", "profile_overrides", "slot"}
+    }
+    assert compact["slot"]["build_plate"] == "cool_plate"
+
+    unknown = _call(
+        runtime,
+        "slice_plan",
+        {"asset_id": asset_id, "target": "a1", "build_plate": "cardboard"},
+    )
+    assert unknown["ok"] is False
+    assert "Unknown build plate" in unknown["error"]["message"]

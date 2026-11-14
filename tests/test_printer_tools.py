@@ -38,6 +38,7 @@ def _fake_slice(
     printer_model: str = "Fake A1",
     ok: bool = True,
     toolheads: list[int] | None = None,
+    material: str = "",
 ) -> str:
     store = SliceStore(workspace)
     slice_id = new_slice_id()
@@ -51,6 +52,7 @@ def _fake_slice(
         "gcode": {"file": "plate_1.gcode", "bytes": 12, "sha256": "deadbeef"},
         "metadata": {"total_layers": 50, "toolheads": toolheads or []},
         "statistics": {},
+        "options": {"material": material} if material else {},
     }
     (directory / "slice.json").write_text(json.dumps(record), encoding="utf-8")
     return slice_id
@@ -433,3 +435,122 @@ def test_printer_save_http_requires_config(tmp_path):
     )
     assert good["ok"] is True
     assert good["printer"]["adapter"] == "http"
+
+
+def test_printer_save_stores_material_slots(tmp_path) -> None:
+    runtime = _runtime(tmp_path, [])
+    payload = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "ams",
+            "confirm": "SAVE PRINTER ams",
+            "base_url": "http://printer.local:7125",
+            "toolheads": 1,
+            "slots": [
+                {"material": "pla", "color": "#ffffff", "name": "White PLA"},
+                {"material": "PETG", "color": "#101010"},
+            ],
+        },
+    )
+    assert payload["ok"] is True
+    assert payload["printer"]["slots"][0]["material"] == "PLA"
+    assert payload["printer"]["slots"][0]["color"] == "#FFFFFF"
+    listed = _call(runtime, "printer_list", {})
+    assert listed["printers"][0]["slots"][1]["material"] == "PETG"
+
+
+def test_send_refuses_a_slot_with_the_wrong_material(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [
+            {
+                "id": "u1",
+                "adapter": "moonraker",
+                "base_url": "http://printer.local:7125",
+                "model": "Fake A1",
+                "toolheads": 2,
+                "slots": [{"material": "PLA"}, {"material": "PETG"}],
+            }
+        ],
+    )
+    fake = FakePrinter()
+    monkeypatch.setattr("xprint.server.build_printer", lambda *a, **k: fake)
+    slice_id = _fake_slice(runtime.workspace, toolheads=[1], material="PLA")
+
+    payload = _call(
+        runtime,
+        "send",
+        {"slice_id": slice_id, "printer_id": "u1", "confirm": f"PRINT u1 {slice_id}"},
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "holds PETG" in payload["error"]["message"]
+    assert fake.uploaded == []
+
+
+def test_send_accepts_an_ams_slot_with_the_right_material(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(
+        tmp_path,
+        [
+            {
+                "id": "ams",
+                "adapter": "moonraker",
+                "base_url": "http://printer.local:7125",
+                "model": "Fake A1",
+                "toolheads": 1,
+                "slots": [
+                    {"material": "PLA", "color": "#FFFFFF"},
+                    {"material": "PETG", "color": "#000000"},
+                    {"material": "PLA", "color": "#FF0000"},
+                ],
+            }
+        ],
+    )
+    fake = FakePrinter()
+    monkeypatch.setattr("xprint.server.build_printer", lambda *a, **k: fake)
+    slice_id = _fake_slice(runtime.workspace, toolheads=[2], material="PLA")
+
+    payload = _call(
+        runtime,
+        "send",
+        {"slice_id": slice_id, "printer_id": "ams", "confirm": f"PRINT ams {slice_id}"},
+    )
+    assert payload["ok"] is True
+    finished = _wait(runtime, payload["job_id"])
+    assert finished["job"]["state"] == "succeeded"
+    checks = finished["job"]["result"]["slot_checks"]
+    assert checks == [{"toolhead": 2, "material": "PLA", "color": "#FF0000", "matches": True}]
+
+
+def test_printer_save_normalises_the_build_plate(workspace, tmp_path) -> None:
+    runtime = _runtime(tmp_path, [])
+    saved = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "u1",
+            "confirm": "SAVE PRINTER u1",
+            "base_url": "http://printer.local:7125",
+            "model": "Snapmaker U1",
+            "build_plate": "pei",
+        },
+    )
+    assert saved["ok"] is True
+    assert saved["printer"]["build_plate"] == "textured_pei"
+
+    listed = _call(runtime, "printer_list", {})
+    assert listed["printers"][0]["build_plate"] == "textured_pei"
+
+    unknown = _call(
+        runtime,
+        "printer_save",
+        {
+            "printer_id": "u1",
+            "confirm": "SAVE PRINTER u1",
+            "base_url": "http://printer.local:7125",
+            "build_plate": "cardboard",
+        },
+    )
+    assert unknown["ok"] is False
+    assert "Unknown build plate" in unknown["error"]["message"]

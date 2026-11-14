@@ -107,6 +107,11 @@ class PrinterSettings(BaseModel):
     adapter: str
     base_url: str | None = None
     toolheads: int = Field(default=1, ge=1, le=9)  # X3D-style printers ship up to 9
+    # Material/colour per filament slot.  Multi-tool machines index by
+    # toolhead; single-nozzle AMS machines index by AMS slot (G-code Tn).
+    slots: list[dict[str, Any]] = Field(default_factory=list)
+    # textured_pei / smooth_pei / cool_plate / engineering_plate / ...
+    build_plate: str = ""
     serial: str | None = None
     access_code_env: str | None = None
     username: str | None = None

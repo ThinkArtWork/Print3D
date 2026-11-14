@@ -144,7 +144,8 @@ class AssetStore:
             if not source_path.is_file():
                 continue
             target = directory / Path(stored_name).name
-            shutil.copyfile(source_path, target)
+            if source_path.resolve() != target.resolve():
+                shutil.copyfile(source_path, target)
             target.chmod(0o644)
             stored[Path(stored_name).name] = sha256_file(target)
 

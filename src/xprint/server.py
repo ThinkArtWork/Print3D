@@ -63,6 +63,7 @@ from .printability import (
 from .printers import (
     PRINTER_ADAPTERS,
     build_printer,
+    normalise_slots,
     validate_http_config,
     validate_printer_id,
 )
@@ -70,12 +71,14 @@ from .registry import Registry, builtin_registry
 from .runner import JobRunner
 from .script_policy import check_script, summarise
 from .slicers import (
+    BUILD_PLATES,
     PreparedProfiles,
     SliceOptions,
     SliceStore,
     build_command,
     find_slicer,
     new_slice_id,
+    normalise_build_plate,
     parse_machine_bed,
     probe_slicer,
     resolve_profiles,
@@ -293,6 +296,68 @@ def _bed_for_target(rt: Runtime, target: str) -> tuple[float, float] | None:
     return parse_machine_bed(machine)
 
 
+def _apply_slot(
+    rt: Runtime,
+    options: SliceOptions | None,
+    *,
+    printer_id: str,
+    slot: int,
+    build_plate: str = "",
+) -> tuple[SliceOptions | None, dict[str, Any] | None]:
+    """Resolve a printer's filament slot and build plate for one slice."""
+    entry = _printer_entry(rt, printer_id) if printer_id else None
+    plate = normalise_build_plate(build_plate)
+    if not plate and entry is not None:
+        plate = normalise_build_plate(entry.build_plate)
+    slot = int(slot) if slot is not None else -1
+    if slot < 0 and not plate:
+        return options, None
+    if slot > 15:
+        raise InvalidArgument("slot must be between 0 and 15")
+    info: dict[str, Any] = {
+        "slot": slot if slot >= 0 else None,
+        "printer": printer_id or None,
+        "build_plate": plate or None,
+    }
+    material = ""
+    if entry is not None and slot >= 0:
+        table = list(entry.slots or [])
+        if table and slot >= len(table):
+            raise InvalidArgument(
+                f"printer {printer_id} has {len(table)} configured slot(s), not {slot + 1}",
+                hint="Update the slot table with printer_save(slots=[...]).",
+            )
+        meta = table[slot] if slot < len(table) else {}
+        material = str(meta.get("material") or "").upper()
+        info.update(
+            {
+                "material": material or None,
+                "color": meta.get("color"),
+                "name": meta.get("name"),
+                "configured": bool(meta),
+            }
+        )
+    requested = (options.material if options is not None else "").strip().upper()
+    if material and requested and material != requested:
+        raise InvalidArgument(
+            f"slot {slot} on {printer_id} holds {material}, but material={requested} was requested",
+            details={"slot_material": material, "requested": requested},
+            hint="Pick the slot with the requested material, or update printer_save(slots=[...]).",
+        )
+    chosen = material or requested
+    if options is None:
+        options = SliceOptions()
+    if slot >= 0:
+        options.toolhead = slot
+    if chosen:
+        options.material = chosen
+    if plate:
+        options.build_plate = plate
+    if chosen:
+        info["material"] = chosen
+    return options, info
+
+
 def _slice_options(
     *,
     material: str = "",
@@ -305,6 +370,7 @@ def _slice_options(
     strength: str = "",
     bed_temp: int = 0,
     nozzle_temp: int = 0,
+    build_plate: str = "",
 ) -> SliceOptions | None:
     """Build SliceOptions from MCP arguments (0 / -1 mean "unset")."""
 
@@ -1680,6 +1746,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "targets": targets,
                 "configured": len(targets),
                 "ready": sum(1 for item in targets if item["ready"]),
+                "build_plates": [
+                    {"id": key, "label": value["label"], "bed_adjust_c": value["adjust"]}
+                    for key, value in BUILD_PLATES.items()
+                ],
                 "hint": (
                     "Add targets.<name> in config.json with machine/process/filament "
                     "preset paths; see README."
@@ -1694,14 +1764,18 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Dry-run a slice: resolve the target presets, report bed size and model "
             "checks, preview process/material options (material, layer_height, infill, "
             "infill_density, walls, top_shells, bottom_shells, strength, bed_temp, "
-            "nozzle_temp) and print the exact command slice_run would execute. Read-only: "
-            "it reports the overrides that slice_run will write into a private preset copy."
+            "nozzle_temp), optionally pinned to a printer filament slot (printer + slot: "
+            "multi-tool or AMS). Read-only: it reports the overrides and the slot material "
+            "that slice_run would use."
         ),
     )
     def slice_plan(
         asset_id: str,
         target: str,
         revision: str = "",
+        printer: str = "",
+        slot: int = -1,
+        build_plate: str = "",
         material: str = "",
         layer_height: float = 0,
         infill: str = "",
@@ -1726,6 +1800,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 strength=strength,
                 bed_temp=bed_temp,
                 nozzle_temp=nozzle_temp,
+                build_plate=build_plate,
+            )
+            options, slot_info = _apply_slot(
+                rt, options, printer_id=printer, slot=slot, build_plate=build_plate
             )
             options_summary = options.resolved() if options is not None else None
             configured = rt.loaded.config.target(target)
@@ -1787,6 +1865,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 filament=filaments,
                 datadir=Path(configured.datadir).expanduser() if configured.datadir else None,
                 options=options_summary,
+                toolhead=int(options.toolhead) if options is not None else 0,
             )
             profile_overrides = {
                 "process": options.process_overrides() if options is not None else {},
@@ -1813,6 +1892,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "slicer": info.to_dict() if info is not None else None,
                 "profiles": prepared.to_dict(),
                 "options": options_summary,
+                "slot": slot_info,
                 "profile_overrides": profile_overrides,
                 "bed_mm": list(bed) if bed else None,
                 "checks": checks,
@@ -1832,8 +1912,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
             "Slice a built revision for a configured target with the external "
             "OrcaSlicer CLI, optionally with process/material options (material implies "
             "nozzle/bed temperatures; layer_height, infill, infill_density, walls, "
-            "top_shells, bottom_shells, strength override the process preset). Runs as "
-            "an async job (poll job_status). confirm must be exactly 'SLICE <asset_id> <target>'."
+            "top_shells, bottom_shells, strength override the process preset; printer + slot "
+            "pin the G-code to a filament slot and take its material/colour). Runs as an "
+            "async job (poll job_status). confirm must be exactly 'SLICE <asset_id> <target>'."
         ),
     )
     def slice_run(
@@ -1841,6 +1922,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         target: str,
         confirm: str,
         revision: str = "",
+        printer: str = "",
+        slot: int = -1,
+        build_plate: str = "",
         timeout_s: float = 0,
         material: str = "",
         layer_height: float = 0,
@@ -1872,6 +1956,10 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 strength=strength,
                 bed_temp=bed_temp,
                 nozzle_temp=nozzle_temp,
+                build_plate=build_plate,
+            )
+            options, slot_info = _apply_slot(
+                rt, options, printer_id=printer, slot=slot, build_plate=build_plate
             )
             options_summary = options.resolved() if options is not None else None
             configured = rt.loaded.config.target(target)
@@ -1953,6 +2041,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "asset_id": asset_id,
                     "revision": rev,
                     "target": target,
+                    "printer": printer or None,
+                    "slot": slot_info,
                     "options": options_summary,
                 },
                 provider=target,
@@ -1965,6 +2055,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "target": target,
                 "printer_model": configured.printer_model,
                 "options": options_summary,
+                "slot": slot_info,
                 "timeout_s": budget,
                 "hint": (
                     f"Poll job_status({job.id}); on success call "
@@ -2006,8 +2097,9 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="printer_list",
         description=(
-            "List configured printers with adapter, model, address, toolheads and "
-            "whether an API key is available. Read-only (no network probe)."
+            "List configured printers with adapter, model, address, toolheads, filament "
+            "slots (material/colour) and whether an API key is available. Read-only (no "
+            "network probe)."
         ),
     )
     def printer_list() -> dict[str, Any]:
@@ -2026,6 +2118,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                         "serial": entry.serial,
                         "storage": entry.storage,
                         "toolheads": entry.toolheads,
+                        "slots": list(entry.slots or []),
+                        "build_plate": entry.build_plate or None,
                         "enabled": entry.enabled,
                         "has_key": bool(key),
                         "key_source": rt.secrets.key_source(entry.id, api_key_env=key_env),
@@ -2066,8 +2160,15 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "adapter": entry.adapter,
                     "model": entry.model,
                     "base_url": entry.base_url,
+                    "toolheads": entry.toolheads,
+                    "slots": list(entry.slots or []),
+                    "build_plate": entry.build_plate or None,
                 },
                 "state": state.to_dict(),
+                "build_plate": entry.build_plate or state.build_plate,
+                "build_plate_source": (
+                    "config" if entry.build_plate else ("firmware" if state.build_plate else None)
+                ),
             }
         except XPrintError as exc:
             return tool_error(exc)
@@ -2075,9 +2176,11 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
     @server.tool(
         name="printer_save",
         description=(
-            "Add or update a printer in config.json (upsert). WRITES the config: "
-            "confirm must be exactly 'SAVE PRINTER <printer_id>'. Supported adapters: "
-            "moonraker (Klipper, default port 7125) and octoprint (port 80/443)."
+            "Add or update a printer in config.json (upsert). slots is a list of "
+            "{material, color, name?, toolhead?} entries in G-code tool order (T0 first); "
+            "single-nozzle AMS machines use one slot per AMS slot. WRITES the config: "
+            "confirm must be exactly 'SAVE PRINTER <printer_id>'. Adapters: moonraker, "
+            "octoprint, bambu_lan, prusalink, http."
         ),
     )
     def printer_save(
@@ -2094,6 +2197,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
         password_env: str = "",
         storage: str = "local",
         http: dict[str, Any] | None = None,
+        slots: list[dict[str, Any]] | None = None,
+        build_plate: str = "",
         enabled: bool = True,
     ) -> dict[str, Any]:
         try:
@@ -2127,6 +2232,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 )
             if chosen == "http":
                 validate_http_config(http or {})
+            slot_table = normalise_slots(slots, toolheads=int(toolheads))
+            plate = normalise_build_plate(build_plate)
             entry = PrinterSettings(
                 id=printer_id,
                 adapter=chosen,
@@ -2141,6 +2248,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 password_env=password_env.strip() or None,
                 storage=storage.strip() or "local",
                 http=http or {},
+                slots=slot_table,
+                build_plate=plate,
             )
             path = save_printer(rt.loaded, entry)
             return {
@@ -2234,26 +2343,58 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     hint="Slice with a target whose printer_model matches this printer.",
                 )
             used = [int(item) for item in (record.get("metadata") or {}).get("toolheads", [])]
-            if used and max(used) >= entry.toolheads:
-                raise InvalidArgument(
-                    f"G-code uses tool T{max(used)} but printer {printer_id} declares "
-                    f"{entry.toolheads} toolhead(s)",
-                    details={"toolheads_used": used, "configured": entry.toolheads},
-                    hint=(
-                        "Add the missing toolheads with printer_save(toolheads=...), "
-                        "or slice for a machine with more extruders."
-                    ),
-                )
-            used = [int(item) for item in (record.get("metadata") or {}).get("toolheads", [])]
-            if used and max(used) >= entry.toolheads:
-                raise InvalidArgument(
-                    f"G-code uses tool T{max(used)} but printer {printer_id} declares "
-                    f"{entry.toolheads} toolhead(s)",
-                    details={"toolheads_used": used, "configured": entry.toolheads},
-                    hint=(
-                        "Add the missing toolheads with printer_save(toolheads=...), "
-                        "or slice for a machine with more extruders."
-                    ),
+            material = str((record.get("options") or {}).get("material") or "").upper()
+            slots = list(entry.slots or [])
+            slot_checks: list[dict[str, Any]] = []
+            material_warnings: list[str] = []
+            if slots:
+                if used and max(used) >= len(slots):
+                    raise InvalidArgument(
+                        f"G-code uses tool T{max(used)} but printer {printer_id} has "
+                        f"{len(slots)} configured filament slot(s)",
+                        details={"toolheads_used": used, "slots": len(slots)},
+                        hint="Add the slot with printer_save(slots=[...]).",
+                    )
+                for tool in used:
+                    meta = slots[tool]
+                    slot_material = str(meta.get("material") or "").upper()
+                    if slot_material and material and slot_material != material:
+                        raise InvalidArgument(
+                            f"G-code asks for {material} on T{tool}, but printer "
+                            f"{printer_id} slot {tool} holds {slot_material}",
+                            details={
+                                "toolhead": tool,
+                                "slot_material": slot_material,
+                                "gcode_material": material,
+                                "color": meta.get("color"),
+                            },
+                            hint=(
+                                "Load the requested material, or re-slice with "
+                                f"printer={printer_id!r}, slot=<the slot holding {material}>."
+                            ),
+                        )
+                    slot_checks.append(
+                        {
+                            "toolhead": tool,
+                            "material": slot_material or None,
+                            "color": meta.get("color"),
+                            "matches": not (slot_material and material)
+                            or slot_material == material,
+                        }
+                    )
+            else:
+                if used and max(used) >= entry.toolheads:
+                    raise InvalidArgument(
+                        f"G-code uses tool T{max(used)} but printer {printer_id} declares "
+                        f"{entry.toolheads} toolhead(s)",
+                        details={"toolheads_used": used, "configured": entry.toolheads},
+                        hint=(
+                            "Set the toolhead count with printer_save(toolheads=...), or "
+                            "declare material slots with printer_save(slots=[...])."
+                        ),
+                    )
+                material_warnings.append(
+                    "printer has no filament-slot metadata; material/colour cannot be verified"
                 )
             adapter = build_printer(entry, secrets=rt.secrets)
             state = adapter.status()
@@ -2279,6 +2420,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "filename": uploaded,
                     "started": bool(start),
                     "printer_state_before": state.to_dict(),
+                    "slot_checks": slot_checks,
+                    "material_warnings": material_warnings,
                     "bytes": gcode.stat().st_size,
                     "sha256": sha256_file(gcode),
                 }
@@ -2290,6 +2433,7 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                     "printer_id": printer_id,
                     "slice_id": slice_id,
                     "start": bool(start),
+                    "slot_checks": slot_checks,
                 },
                 provider=printer_id,
             )
@@ -2302,6 +2446,8 @@ def build_server(runtime: Runtime | None = None, *, name: str = "xprint") -> Fas
                 "filename": remote_name,
                 "started": bool(start),
                 "printer_state": state.to_dict(),
+                "slot_checks": slot_checks,
+                "material_warnings": material_warnings,
                 "hint": f"Poll job_status({job.id!r}) for the upload/start result.",
             }
         except XPrintError as exc:

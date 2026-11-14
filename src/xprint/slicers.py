@@ -89,6 +89,68 @@ INFILL_PATTERNS = frozenset(
     }
 )
 
+#: OrcaSlicer's ``curr_bed_type`` selects which filament temperature key is
+#: used.  ``key`` is the filament setting that must hold the bed temperature
+#: for that plate; ``adjust`` is a material-independent correction.
+BUILD_PLATES: dict[str, dict[str, object]] = {
+    "textured_pei": {
+        "label": "Textured PEI Plate",
+        "key": "textured_plate_temp",
+        "adjust": 0,
+    },
+    "smooth_pei": {
+        "label": "High Temp Plate",
+        "key": "hot_plate_temp",
+        "adjust": 0,
+    },
+    "cool_plate": {"label": "Cool Plate", "key": "cool_plate_temp", "adjust": -15},
+    "engineering_plate": {
+        "label": "Engineering Plate",
+        "key": "eng_plate_temp",
+        "adjust": 10,
+    },
+    "supertack": {
+        "label": "Supertack Plate",
+        "key": "supertack_plate_temp",
+        "adjust": -5,
+    },
+    "textured_cool": {
+        "label": "Textured Cool Plate",
+        "key": "textured_cool_plate_temp",
+        "adjust": -15,
+    },
+}
+
+BUILD_PLATE_ALIASES = {
+    "pei": "textured_pei",
+    "textured": "textured_pei",
+    "textured_pei": "textured_pei",
+    "smooth": "smooth_pei",
+    "smooth_pei": "smooth_pei",
+    "hot": "smooth_pei",
+    "cool": "cool_plate",
+    "cool_plate": "cool_plate",
+    "engineering": "engineering_plate",
+    "engineering_plate": "engineering_plate",
+    "eng": "engineering_plate",
+    "supertack": "supertack",
+    "textured_cool": "textured_cool",
+}
+
+
+def normalise_build_plate(value: str) -> str:
+    """Map a user-facing plate name to the canonical id ('' means unknown)."""
+    text = (value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not text:
+        return ""
+    if text in BUILD_PLATES:
+        return text
+    if text in BUILD_PLATE_ALIASES:
+        return BUILD_PLATE_ALIASES[text]
+    known = ", ".join(sorted(BUILD_PLATES))
+    raise InvalidArgument(f"Unknown build plate: {value!r}", hint=f"Known plates: {known}.")
+
+
 #: strength preset -> (walls, top shells, bottom shells)
 STRENGTH_PRESETS: dict[str, tuple[int, int, int]] = {
     "light": (2, 3, 2),
@@ -116,9 +178,12 @@ class SliceOptions:
     strength: str = ""
     bed_temp: int | None = None
     nozzle_temp: int | None = None
+    toolhead: int = 0
+    build_plate: str = ""
 
     def resolved(self) -> dict[str, Any]:
         material = self.material.strip().upper()
+        plate = normalise_build_plate(self.build_plate)
         nozzle = self.nozzle_temp
         bed = self.bed_temp
         if material:
@@ -135,6 +200,8 @@ class SliceOptions:
             if pair is not None:
                 nozzle = nozzle if nozzle is not None else pair[0]
                 bed = bed if bed is not None else pair[1]
+                if plate and self.bed_temp is None:
+                    bed = max(0, bed + int(BUILD_PLATES[plate]["adjust"]))
         if nozzle is not None and not 150 <= int(nozzle) <= 350:
             raise InvalidArgument("nozzle_temp must be between 150 and 350 °C")
         if bed is not None and not 0 <= int(bed) <= 150:
@@ -173,6 +240,8 @@ class SliceOptions:
             raise InvalidArgument("top_shells must be between 1 and 20")
         if bottom is not None and not 1 <= int(bottom) <= 20:
             raise InvalidArgument("bottom_shells must be between 1 and 20")
+        if not 0 <= int(self.toolhead) <= 8:
+            raise InvalidArgument("toolhead must be between 0 and 8")
 
         return {
             "material": material or None,
@@ -185,6 +254,8 @@ class SliceOptions:
             "strength": strength or None,
             "bed_temp": int(bed) if bed is not None else None,
             "nozzle_temp": int(nozzle) if nozzle is not None else None,
+            "toolhead": int(self.toolhead),
+            "build_plate": plate or None,
         }
 
     def process_overrides(self) -> dict[str, str]:
@@ -202,6 +273,8 @@ class SliceOptions:
             overrides["top_shell_layers"] = str(data["top_shells"])
         if data["bottom_shells"] is not None:
             overrides["bottom_shell_layers"] = str(data["bottom_shells"])
+        if data["build_plate"]:
+            overrides["curr_bed_type"] = BUILD_PLATES[data["build_plate"]]["label"]
         return overrides
 
     def filament_overrides(self) -> dict[str, str]:
@@ -229,16 +302,21 @@ class SliceOptions:
                     "first_layer_bed_temperature": bed,
                 }
             )
-            for plate in (
-                "hot_plate",
-                "textured_plate",
-                "cool_plate",
-                "eng_plate",
-                "supertack_plate",
-                "graphic_effect_plate",
-            ):
-                overrides[f"{plate}_temp"] = bed
-                overrides[f"{plate}_temp_initial_layer"] = bed
+            if data["build_plate"]:
+                key = str(BUILD_PLATES[data["build_plate"]]["key"])
+                overrides[key] = bed
+                overrides[f"{key}_initial_layer"] = bed
+            else:
+                for plate in (
+                    "hot_plate",
+                    "textured_plate",
+                    "cool_plate",
+                    "eng_plate",
+                    "supertack_plate",
+                    "graphic_effect_plate",
+                ):
+                    overrides[f"{plate}_temp"] = bed
+                    overrides[f"{plate}_temp_initial_layer"] = bed
         return overrides
 
 
@@ -408,6 +486,7 @@ class PreparedProfiles:
     overrides: dict[str, Any] = field(default_factory=dict)
     filament_overrides: dict[str, Any] = field(default_factory=dict)
     options: dict[str, Any] | None = None
+    toolhead: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -419,8 +498,29 @@ class PreparedProfiles:
             "overrides": dict(self.overrides),
             "filament_overrides": dict(self.filament_overrides),
             "options": dict(self.options) if self.options else None,
+            "toolhead": int(self.toolhead),
             "warnings": list(self.warnings),
         }
+
+
+def _expand_filaments(filaments: list[Path], toolhead: int, folder: Path) -> list[Path]:
+    """Return one filament file per nozzle up to ``toolhead``.
+
+    OrcaSlicer prints a single-object plate with the first filament unless the
+    object is mapped to another one.  Loading ``toolhead + 1`` copies and
+    passing ``--load-filament-ids "<toolhead + 1>"`` selects that nozzle while
+    keeping every slot on the same material.
+    """
+    if toolhead <= 0 or not filaments:
+        return filaments
+    base = filaments[0]
+    folder.mkdir(parents=True, exist_ok=True)
+    expanded = list(filaments)
+    for index in range(1, toolhead + 1):
+        target = folder / f"{base.stem}_slot{index + 1}{base.suffix}"
+        shutil.copyfile(base, target)
+        expanded.append(target)
+    return expanded
 
 
 def _prepare_standalone(
@@ -432,6 +532,7 @@ def _prepare_standalone(
     overrides: dict[str, Any],
     filament_overrides: dict[str, str],
     options: dict[str, Any] | None,
+    toolhead: int,
     workdir: Path,
     warnings: list[str],
 ) -> PreparedProfiles:
@@ -457,6 +558,7 @@ def _prepare_standalone(
 
     process_copy = _copy_and_patch(process, overrides)
     filament_copy = [_copy_and_patch(item, filament_overrides) for item in filaments]
+    filament_copy = _expand_filaments(filament_copy, toolhead, folder)
     warnings.append(
         "process/material overrides were written to standalone copies under the slice "
         "workdir; the installed presets stay untouched"
@@ -469,6 +571,7 @@ def _prepare_standalone(
         overrides=overrides,
         filament_overrides=filament_overrides,
         options=options,
+        toolhead=toolhead,
         warnings=warnings,
     )
 
@@ -490,19 +593,21 @@ def prepare_profiles(
     filament_overrides: dict[str, str] = {}
     options_summary: dict[str, Any] | None = None
     warnings: list[str] = []
+    toolhead = int(options.toolhead) if options is not None else 0
 
     if options is not None:
         options_summary = options.resolved()
         overrides.update(options.process_overrides())
         filament_overrides = options.filament_overrides()
 
-    if not overrides and not filament_overrides:
+    if not overrides and not filament_overrides and toolhead <= 0:
         return PreparedProfiles(
             machine=machine,
             process=process,
             filament=filaments,
             datadir=datadir,
             options=options_summary,
+            toolhead=toolhead,
             warnings=warnings,
         )
 
@@ -517,6 +622,7 @@ def prepare_profiles(
             overrides=overrides,
             filament_overrides=filament_overrides,
             options=options_summary,
+            toolhead=toolhead,
             workdir=workdir,
             warnings=warnings,
         )
@@ -543,6 +649,7 @@ def prepare_profiles(
             data = json.loads(item.read_text(encoding="utf-8-sig"))
             data.update(filament_overrides)
             item.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    filament_copy = _expand_filaments(filament_copy, toolhead, vendor_copy / "filament")
     warnings.append(
         "process/material overrides were written to a private copy of the vendor profiles; "
         f"the installed profiles stay untouched ({source_root})"
@@ -555,6 +662,7 @@ def prepare_profiles(
         overrides=overrides,
         filament_overrides=filament_overrides,
         options=options_summary,
+        toolhead=toolhead,
         warnings=warnings,
     )
 
@@ -718,6 +826,8 @@ def build_command(
         "--load-filaments",
         ";".join(str(item) for item in prepared.filament),
     ]
+    if prepared.toolhead > 0:
+        command += ["--load-filament-ids", str(prepared.toolhead + 1)]
     if supports_statistics:
         command.append("--export-statistics")
     command += ["--slice", "0", "--outputdir", str(outdir), str(stl)]

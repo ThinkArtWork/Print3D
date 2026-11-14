@@ -83,7 +83,9 @@ def _stl_mesh_stats(path: Path) -> dict[str, Any] | None:
 
 def _num(value: Any) -> float | None:
     try:
-        return round(float(value), 3)
+        # Add 0.0 so a rounded -0.0 becomes 0.0: JSON cannot round-trip the
+        # sign of negative zero losslessly.
+        return round(float(value), 3) + 0.0
     except (TypeError, ValueError):
         return None
 
