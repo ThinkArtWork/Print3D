@@ -699,7 +699,10 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 className: 'xp-btn',
                 style: { ...styles.button, marginTop: 4, color: 'var(--dsw-alias-label-primary)' },
-                onClick: refresh,
+                onClick: () => {
+                  retries.current = 0
+                  refresh()
+                },
                 disabled: busy,
               }, busy ? t('connecting') : t('retry')),
             ),
