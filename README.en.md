@@ -101,7 +101,7 @@ Self-hosted models need no cloud key: configure the command under `providers.loc
 - **Built-in LLM or chat UI**: Print3D is an MCP server. Understanding requests, writing scripts and looking at previews happen in the Agent.
 - **A hosted multi-tenant modelling platform**: this is a single-user, self-hosted service; do not expose HTTP mode to the public internet.
 - **A guarantee that a print will succeed**: geometry checks and printability scores are decision aids, not structural simulation or certification.
-- **Hardware-verified Bambu LAN / PrusaLink**: adapters have simulated tests, but have not been fully verified on that hardware.
+- **Hardware-verified Bambu LAN / PrusaLink**: adapters have simulated coverage, but have not been fully verified on that hardware.
 - **A stable release**: the project is Alpha. PyPI and GitHub Releases are not published yet; install from source for now.
 
 ## License

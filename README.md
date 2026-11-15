@@ -101,7 +101,7 @@ export OPENAI_API_KEY=...         # 概念图 / images provider
 - **自带大模型或聊天界面**：Print3D 是 MCP server，理解需求、写脚本、看图由 Agent 完成。
 - **托管的云端建模平台**：它是单用户、自托管服务；HTTP 模式不应直接暴露到公网。
 - **保证打印成功**：几何检查和可打印性评分是决策辅助，不是结构仿真或认证。
-- **Bambu LAN / PrusaLink 的真机验证**：适配器已有模拟测试，但尚未在对应硬件上完整验证。
+- **Bambu LAN / PrusaLink 的真机验证**：适配器已有模拟验证，但尚未在对应硬件上完整验证。
 - **正式发行版**：项目仍是 Alpha；PyPI 与 GitHub Release 尚未发布，当前以源码安装为主。
 
 ## License

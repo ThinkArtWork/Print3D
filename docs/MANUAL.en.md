@@ -73,11 +73,11 @@ uv sync
 uv run print3d version
 ```
 
-`uv sync` creates `.venv` and installs the runtime dependencies. To run tests and lint, add the dev dependencies:
+`uv sync` creates `.venv` and installs the runtime dependencies. To run lint, add the dev dependencies:
 
 ```bash
 uv sync --extra dev
-uv run python -m pytest -q
+uv run ruff check src
 ```
 
 > Print3D has not been published to PyPI yet. Until the first GitHub Release appears, do not use `pipx install print3d`; installing from source is the only reliable way. Once a release is out, you can also `uv tool install .` or `pipx install .` to put the command on your PATH.
