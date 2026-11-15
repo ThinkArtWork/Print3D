@@ -138,7 +138,7 @@ Add an entry to the host's MCP configuration:
       "command": "/absolute/path/to/Print3D/.venv/bin/print3d",
       "args": ["serve", "--stdio"],
       "env": {
-        "PRINT3D_WORKSPACE": "/Users/you/.print3d"
+        "PRINT3D_WORKSPACE": "/absolute/path/to/.print3d"
       }
     }
   }

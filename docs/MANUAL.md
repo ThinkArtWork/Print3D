@@ -138,7 +138,7 @@ Print3D 是一个标准 MCP server，本身没有 UI。宿主（DSH、Claude Des
       "command": "/absolute/path/to/Print3D/.venv/bin/print3d",
       "args": ["serve", "--stdio"],
       "env": {
-        "PRINT3D_WORKSPACE": "/Users/you/.print3d"
+        "PRINT3D_WORKSPACE": "/absolute/path/to/.print3d"
       }
     }
   }
