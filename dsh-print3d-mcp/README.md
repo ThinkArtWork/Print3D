@@ -6,8 +6,8 @@
 
 ```bash
 # 1) 先让 `print3d` 在 PATH 上（任选一种）
-pipx install "git+https://github.com/<you>/Print3D.git"   # 发布后；或
-uvx --from git+https://github.com/<you>/Print3D.git print3d capabilities
+pipx install "git+https://github.com/ThinkArtWork/Print3D.git"   # 发布后；或
+uvx --from git+https://github.com/ThinkArtWork/Print3D.git print3d capabilities
 cd /path/to/Print3D && .venv/bin/pip install -e .        # 从源码
 
 # 2) 安装 bundle：DSH 的 Plugins → Add plugin 选择本目录
