@@ -4,7 +4,7 @@
 
 **自托管 3D 打印 MCP 服务 —— 从一句话到真正打印出来的零件。**
 
-MIT · Python 3.11+ · macOS / Linux · [使用手册](docs/MANUAL.md) · [English](README.en.md)
+MIT · Python 3.11+ · macOS / Linux / Windows · [使用手册](docs/MANUAL.md) · [English](README.en.md)
 
 </div>
 
@@ -28,7 +28,7 @@ MIT · Python 3.11+ · macOS / Linux · [使用手册](docs/MANUAL.md) · [Engli
 
 ## 安装
 
-需要 Python 3.11+、git、macOS 或 Linux。推荐安装方式[uv](https://docs.astral.sh/uv/) 。还需要安装两个本机工具(切片和 Blender)：
+需要 Python 3.11+、git，以及 macOS、Linux 或 Windows 10/11 x64。推荐安装方式[uv](https://docs.astral.sh/uv/) 。还需要安装两个本机工具(切片和 Blender)：
 
 | 依赖 | 用途 | 不装会怎样 |
 | --- | --- | --- |
@@ -40,16 +40,16 @@ MIT · Python 3.11+ · macOS / Linux · [使用手册](docs/MANUAL.md) · [Engli
 不用自己逐条敲命令。复制下面这段（GitHub 代码块右上角有复制按钮）交给能执行命令的 Agent：
 
 ```text
-你是我的安装助手。请在这台 macOS/Linux 机器上安装 Print3D MCP 服务：
+你是我的安装助手。请在这台 macOS / Linux / Windows 机器上安装 Print3D MCP 服务：
 
 仓库：https://github.com/ThinkArtWork/Print3D
-依赖：Python 3.11+、git、uv；Windows 不支持。
+依赖：Python 3.11+、git、uv。
 
 1. 检查系统和依赖；缺 uv 就按官方方式安装；Python 版本不够就告诉我，不要擅自改系统 Python。
 2. 克隆仓库到合适目录，执行 uv sync 和 uv run print3d init。
 3. 运行 uv run print3d capabilities，报告 CAD、渲染、切片器、打印机状态。
 4. 检查 OrcaSlicer 和 Blender 是否安装；缺失只报告，不要自动下载大文件。
-5. 根据我的 Agent（DSH / Claude Desktop / Cursor）生成 stdio 配置；command 使用仓库内 .venv/bin/print3d 的绝对路径，写入前先给我确认。
+5. 根据我的 Agent（DSH / Claude Desktop / Cursor）生成 stdio 配置；command 使用仓库内虚拟环境 print3d 的绝对路径（macOS/Linux 是 .venv/bin/print3d，Windows 是 .venv\Scripts\print3d.exe），写入前先给我确认。
 6. 不要索要 API key，核心功能不需要。最后给我一条测试提示词。
 ```
 
@@ -62,7 +62,16 @@ uv sync
 uv run print3d init
 ```
 
-`print3d init` 会创建 `~/.print3d/` 工作区。然后把 Print3D 配置到 Agent（DSH、Claude Desktop、Cursor 等）：
+Windows 用同一套命令，只是入口在 `.venv\Scripts\`（PowerShell）：
+
+```powershell
+git clone https://github.com/ThinkArtWork/Print3D.git
+cd Print3D
+uv sync
+.\.venv\Scripts\print3d.exe init
+```
+
+`print3d init` 会创建 `~/.print3d/` 工作区（Windows 上是 `%USERPROFILE%\.print3d`）。然后把 Print3D 配置到 Agent（DSH、Claude Desktop、Cursor 等）：
 
 ```json
 {
@@ -75,7 +84,7 @@ uv run print3d init
 }
 ```
 
-`command` 必须是绝对路径。本地建模、预览和导出不需要任何 API key；只有使用概念图、云端生成等功能时需要你预先开通相应的付费账号：
+`command` 必须是绝对路径（Windows 换成 `.venv\Scripts\print3d.exe` 的绝对路径，JSON 里的反斜杠要写成 `\\`）。本地建模、预览和导出不需要任何 API key；只有使用概念图、云端生成等功能时需要你预先开通相应的付费账号：
 
 ```bash
 export TRIPO_API_KEY=...          # Tripo AI
@@ -93,17 +102,17 @@ export OPENAI_API_KEY=...         # 概念图 / images provider
 - **资产能力**：版本管理、四视图预览、交互式 HTML 查看器、SVG/DXF 工程图、STL/STEP/脚本导出。
 - **可打印性**：悬垂与支撑估计、薄壁检查、热床接触、摆放评分和 24 向排序。
 - **切片与打印**：OrcaSlicer；Moonraker/Klipper（含 Snapmaker U1 实机验证）、OctoPrint、Bambu LAN、PrusaLink、通用 HTTP；多工具头/多材料槽。
-- **平台与 Agent**：macOS / Linux；Python 3.11+（CI 覆盖 3.11 / 3.13）；MCP stdio 与 streamable HTTP；DSH、Claude Desktop、Cursor 等 Agent。
+- **平台与 Agent**：macOS、Linux、Windows 10/11 x64；Python 3.11+；MCP stdio 与 streamable HTTP；DSH、Claude Desktop、Cursor 等 Agent。
 
 ## 尚未实现
 
-- **Windows**：依赖 POSIX 进程组和资源限制，当前不可用。
 - **自带大模型或聊天界面**：Print3D 是 MCP server，理解需求、写脚本、看图由 Agent 完成。
 - **托管的云端建模平台**：它是单用户、自托管服务；HTTP 模式不应直接暴露到公网。
 
 ## ⚠️注意
 
 - **不保证打印成功**：几何检查和可打印性评分是决策辅助，不是结构仿真或认证。
+- **Windows 的隔离强度**：Windows 没有 POSIX `rlimit` 的等价物，生成代码只受墙钟超时和进程树终止约束；macOS / Linux 上还有 CPU 时间、文件大小和句柄数限额。`print3d capabilities` 的 `sandbox` 字段会如实报告这台机器能做什么。
 - **Bambu LAN / PrusaLink 的真机验证**：适配器已有模拟测试，但尚未在对应硬件上完整验证,目前完成的验证的硬件:Snapmaker U1。
 - **正式发行版**：项目仍是 Alpha；PyPI 与 GitHub Release 尚未发布，当前以源码安装为主。
 

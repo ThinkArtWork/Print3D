@@ -8,7 +8,7 @@
 > - 只想尽快跑起来：用 §1.2 的 Agent 安装提示词，或按 §1.3 手动安装。
 > - 需要全部切片参数与打印机字段：见 §8、§9；排错见 §12。
 >
-> 文中命令默认在仓库根目录执行；`print3d` 指仓库虚拟环境里的 `.venv/bin/print3d`，用 `uv run print3d` 也可以。
+> 文中命令默认在仓库根目录执行；`print3d` 指仓库虚拟环境里的 `.venv/bin/print3d`（Windows 是 `.venv\Scripts\print3d.exe`），用 `uv run print3d` 也可以。
 
 ## 目录
 
@@ -37,8 +37,8 @@
 
 | 项目 | 要求 | 说明 |
 | --- | --- | --- |
-| Python | 3.11+ | CI 覆盖 3.11 / 3.13 |
-| 系统 | macOS / Linux | Windows 不可用：CAD/切片 worker 依赖 POSIX 进程组与 `resource` |
+| Python | 3.11+ | 3.11 / 3.12 / 3.13 都可用 |
+| 系统 | macOS / Linux / Windows 10–11 x64 | Windows 的子进程隔离是 Job Object + 墙钟超时，没有 POSIX `rlimit`；详见 §11 |
 | [uv](https://docs.astral.sh/uv/) | 推荐 | 也可以用自己的 venv + `pip` |
 | 磁盘 | 约 250 MB 起 | build123d / OCP 是主要体积 |
 | Blender（可选） | 3.x+ | `blender_run`、`mesh_fit` 需要 |
@@ -51,16 +51,16 @@
 不用自己逐条敲命令。复制下面这段（GitHub 代码块右上角有复制按钮）交给能执行命令的 Agent：
 
 ```text
-你是我的安装助手。请在这台 macOS/Linux 机器上安装 Print3D MCP 服务：
+你是我的安装助手。请在这台 macOS / Linux / Windows 机器上安装 Print3D MCP 服务：
 
 仓库：https://github.com/ThinkArtWork/Print3D
-依赖：Python 3.11+、git、uv；Windows 不支持。
+依赖：Python 3.11+、git、uv。
 
 1. 检查系统和依赖；缺 uv 就按官方方式安装；Python 版本不够就告诉我，不要擅自改系统 Python。
 2. 克隆仓库到合适目录，执行 uv sync 和 uv run print3d init。
 3. 运行 uv run print3d capabilities，报告 CAD、渲染、切片器、打印机状态。
 4. 检查 OrcaSlicer 和 Blender 是否安装；缺失只报告，不要自动下载大文件。
-5. 根据我的 MCP 宿主（DSH / Claude Desktop / Cursor）生成 stdio 配置；command 使用仓库内 .venv/bin/print3d 的绝对路径，写入前先给我确认。
+5. 根据我的 MCP 宿主（DSH / Claude Desktop / Cursor）生成 stdio 配置；command 使用仓库内虚拟环境 print3d 的绝对路径（macOS/Linux 是 .venv/bin/print3d，Windows 是 .venv\Scripts\print3d.exe），写入前先给我确认。
 6. 不要索要 API key，核心功能不需要。最后给我一条测试提示词。
 ```
 
@@ -73,12 +73,24 @@ uv sync
 uv run print3d version
 ```
 
+Windows 用同一套命令，入口换成 `.venv\Scripts\`（PowerShell）：
+
+```powershell
+git clone https://github.com/ThinkArtWork/Print3D.git
+cd Print3D
+uv sync
+.\.venv\Scripts\print3d.exe version
+```
+
 `uv sync` 会创建 `.venv` 并安装运行依赖。要跑 lint，加上开发依赖：
 
 ```bash
 uv sync --extra dev
 uv run ruff check src
 ```
+
+> Windows 上如果 `OrcaSlicer` 的 `--help` 没有输出，不影响切片：Print3D 只在 `--help` 有内容时才据此判断 CLI 能力，静默时按“待验证”处理并继续。<br>
+> Windows 需要 64 位 Python；`cadquery-ocp-novtk` 没有 win_arm64 wheel，Windows on ARM 目前不行。
 
 > Print3D 尚未发布到 PyPI。在首个 GitHub Release 出现之前，不要用 `pipx install print3d`；源码安装是唯一可靠的方式。Release 发布后，也可以 `uv tool install .` 或 `pipx install .` 把命令装到 PATH。
 
@@ -147,8 +159,8 @@ Print3D 是一个标准 MCP server，本身没有 UI。宿主（DSH、Claude Des
 
 两个容易踩的点：
 
-- **命令必须是绝对路径**。宿主不会替你 `cd` 到仓库，也不会展开 `~`。
-- 如果希望工作区跟着项目走，把 `PRINT3D_WORKSPACE` 指到项目的 `.print3d`；否则默认用 `~/.print3d`。
+- **命令必须是绝对路径**。宿主不会替你 `cd` 到仓库，也不会展开 `~`。Windows 上把 `command` 换成本仓库的 `.venv\Scripts\print3d.exe` 绝对路径，JSON 里反斜杠要写成 `\\`。
+- 如果希望工作区跟着项目走，把 `PRINT3D_WORKSPACE` 指到项目的 `.print3d`；否则默认用 `~/.print3d`（Windows 是 `%USERPROFILE%\.print3d`）。
 
 ### 2.2 DSH
 
@@ -336,6 +348,8 @@ generate_cloud(...) / generate_local(...) / slice_run(...) / send(...)
 7. 脚本上限 64 KiB。
 
 静态检查是纵深防御，真正的隔离在子进程：独立进程组、CPU/文件/句柄限额、超时 SIGKILL、环境变量白名单。不要把它当成多租户沙箱——它假设运行脚本的人就是你。
+
+Windows 上这条链路改成：子进程进 Job Object（关闭即整棵树终止）、管道按 UTF-8 解码、超时用 `TerminateJobObject`；**没有** CPU 时间 / 文件大小 / 句柄数限额，只剩墙钟超时。`print3d capabilities` 的 `sandbox` 字段会如实输出这台机器的实际能力，不要假设它和 macOS / Linux 等价。
 
 **改已有 STEP：**
 
@@ -795,13 +809,15 @@ chmod 600 ~/.print3d/secrets.json
 1. **只读工具免费**：`capabilities`、`system_status`、`job_status`、`asset_list`、`model_show`、`printability_check`、`orientation_plan` 不需要确认，并返回 `writes_performed: false`；`model_preview` 只写预览缓存。
 2. **写操作要精确确认**：确认串逐字符比较，错了返回 `confirmation_mismatch`，不写任何文件。不要凭印象拼 `confirm`，从 `slice_plan` / 工具返回里复制。
 3. **路径沙箱**：除 `reference_import` 读取你指定的图片外，用户给的路径都会解析符号链接后校验；逃出工作区返回 `path_outside_workspace`。`asset_export` 的 `out_path` 也不能写到工作区外。
-4. **脚本策略 + 子进程隔离**：build123d 脚本先过 AST 白名单，再在独立进程组里执行，带 CPU/文件/句柄限额、超时 SIGKILL 和干净环境变量。bpy 脚本同样先审后跑。静态审查是纵深防御，不是多租户沙箱。
+4. **脚本策略 + 子进程隔离**：build123d 脚本先过 AST 白名单，再在独立进程组里执行，带 CPU/文件/句柄限额、超时 SIGKILL 和干净环境变量。bpy 脚本同样先审后跑。静态审查是纵深防御，不是多租户沙箱。Windows 上子进程进 Job Object、超时整棵树终止，但没有 CPU/文件大小/句柄限额——能力以 `capabilities.sandbox` 为准。
 5. **下载有上限**：云端模型下载只接受 http(s)、限制重定向次数、边下边计数；概念图 URL 也有大小上限。HTTP 模式用恒时比较 Bearer token。
 6. **不开放任意 G-code**：`send` 只接受切片器产物，先检查再上传；不做自动重试。
 7. **密钥不落日志**：只从环境变量或 `secrets.json` 读取，输出统一脱敏。
 8. **默认本机**：除显式调用云端生成外，建模、渲染、切片都在本机完成；发送只到你的打印机。
 
 **它不是面向不可信用户的服务。** HTTP 模式不要暴露公网；共享机器上把工作区和 secrets 的权限管好；云端生成会把 prompt/图片发给第三方，敏感内容走本地路径。
+
+`print3d capabilities` 的 `sandbox` 字段就是这台机器实际强制的内容（`wall_clock_timeout`、`tree_kill`、`kill_method`、`cpu_time_limit`、`file_size_limit`、`open_file_limit`）。Windows 上后三项都是 `false`，这是事实而不是配置项；需要严格配额时把模型构建放到 macOS/Linux 上跑。
 
 ---
 

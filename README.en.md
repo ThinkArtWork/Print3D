@@ -4,7 +4,7 @@
 
 **Self-hosted 3D printing MCP server — from a prompt to a part on the printer.**
 
-MIT · Python 3.11+ · macOS / Linux · [Manual](docs/MANUAL.en.md) · [中文](README.md)
+MIT · Python 3.11+ · macOS / Linux / Windows · [Manual](docs/MANUAL.en.md) · [中文](README.md)
 
 </div>
 
@@ -28,7 +28,7 @@ MIT · Python 3.11+ · macOS / Linux · [Manual](docs/MANUAL.en.md) · [中文](
 
 ## Install
 
-You need Python 3.11+, git, and macOS or Linux. [uv](https://docs.astral.sh/uv/) is the recommended installer. Slicing and the Blender path also need two local tools:
+You need Python 3.11+, git, and macOS, Linux or Windows 10/11 x64. [uv](https://docs.astral.sh/uv/) is the recommended installer. Slicing and the Blender path also need two local tools:
 
 | Dependency | Used for | Without it |
 | --- | --- | --- |
@@ -40,16 +40,16 @@ You need Python 3.11+, git, and macOS or Linux. [uv](https://docs.astral.sh/uv/)
 No need to type every command. Copy the block below (the copy button is in its top-right corner on GitHub) into an Agent that can run commands:
 
 ```text
-You are my installation assistant. Install the Print3D MCP server on this macOS/Linux machine.
+You are my installation assistant. Install the Print3D MCP server on this macOS / Linux / Windows machine.
 
 Repository: https://github.com/ThinkArtWork/Print3D
-Requirements: Python 3.11+, git, uv. Windows is not supported.
+Requirements: Python 3.11+, git, uv.
 
 1. Check the OS and dependencies. If uv is missing, install it the official way. If Python is too old, tell me; do not change the system Python.
 2. Clone the repository to a suitable directory, then run uv sync and uv run print3d init.
 3. Run uv run print3d capabilities and report the CAD, render, slicer and printer status.
 4. Check whether OrcaSlicer and Blender are installed. If missing, only report it; do not download large installers automatically.
-5. Generate a stdio config for my Agent (DSH / Claude Desktop / Cursor). Use the absolute path to .venv/bin/print3d inside the repository, and show me the config before writing it.
+5. Generate a stdio config for my Agent (DSH / Claude Desktop / Cursor). Use the absolute path to print3d inside the repository virtualenv (.venv/bin/print3d on macOS/Linux, .venv\Scripts\print3d.exe on Windows), and show me the config before writing it.
 6. Do not ask for API keys; the core features do not need them. Finish with one test prompt I can try.
 ```
 
@@ -62,7 +62,16 @@ uv sync
 uv run print3d init
 ```
 
-`print3d init` creates a workspace at `~/.print3d/`. Then register Print3D with your Agent (DSH, Claude Desktop, Cursor, etc.):
+Windows uses the same commands; only the entry point moves to `.venv\Scripts\` (PowerShell):
+
+```powershell
+git clone https://github.com/ThinkArtWork/Print3D.git
+cd Print3D
+uv sync
+.\.venv\Scripts\print3d.exe init
+```
+
+`print3d init` creates a workspace at `~/.print3d/` (`%USERPROFILE%\.print3d` on Windows). Then register Print3D with your Agent (DSH, Claude Desktop, Cursor, etc.):
 
 ```json
 {
@@ -75,7 +84,7 @@ uv run print3d init
 }
 ```
 
-`command` must be an absolute path. Core modelling, preview and export need no API keys. Only optional paths do:
+`command` must be an absolute path (on Windows use the absolute path to `.venv\Scripts\print3d.exe`, and write backslashes as `\\` in JSON). Core modelling, preview and export need no API keys. Only optional paths do:
 
 ```bash
 export TRIPO_API_KEY=...          # Tripo AI
@@ -93,14 +102,14 @@ Self-hosted models need no cloud key: configure the command under `providers.loc
 - **Assets**: revisions, four-view previews, interactive HTML viewer, SVG/DXF drawings, STL/STEP/script export.
 - **Printability**: overhang and support estimates, thin-wall checks, bed contact, placement scoring and 24-orientation ranking.
 - **Slicing and printing**: OrcaSlicer; Moonraker/Klipper (including hardware-verified Snapmaker U1), OctoPrint, Bambu LAN, PrusaLink, generic HTTP; multiple toolheads and material slots.
-- **Platforms and Agents**: macOS / Linux; Python 3.11+ (CI covers 3.11 and 3.13); MCP over stdio or streamable HTTP; DSH, Claude Desktop, Cursor and other Agents.
+- **Platforms and Agents**: macOS, Linux and Windows 10/11 x64; Python 3.11+; MCP over stdio or streamable HTTP; DSH, Claude Desktop, Cursor and other Agents.
 
 ## Not supported
 
-- **Windows**: relies on POSIX process groups and resource limits; currently unusable.
 - **Built-in LLM or chat UI**: Print3D is an MCP server. Understanding requests, writing scripts and looking at previews happen in the Agent.
 - **A hosted multi-tenant modelling platform**: this is a single-user, self-hosted service; do not expose HTTP mode to the public internet.
 - **A guarantee that a print will succeed**: geometry checks and printability scores are decision aids, not structural simulation or certification.
+- **Weaker isolation on Windows**: Windows has no POSIX `rlimit` equivalent, so generated code is bounded only by the wall-clock timeout and a process-tree kill; macOS and Linux additionally cap CPU time, file size and open files. The `sandbox` field of `print3d capabilities` reports exactly what the machine enforces.
 - **Hardware-verified Bambu LAN / PrusaLink**: adapters have simulated tests, but have not been fully verified on that hardware,only tested on the Snapmaker U1.
 - **A stable release**: the project is Alpha. PyPI and GitHub Releases are not published yet; install from source for now.
 

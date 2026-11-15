@@ -8,7 +8,7 @@
 > - If you just want it running: use the agent install prompt in §1.2, or install manually per §1.3.
 > - Need every slicing parameter and printer field: see §8 and §9; troubleshooting is in §12.
 >
-> Commands below are run from the repository root; `print3d` means `.venv/bin/print3d` inside the repository virtualenv — `uv run print3d` works too.
+> Commands below are run from the repository root; `print3d` means `.venv/bin/print3d` inside the repository virtualenv (`.venv\Scripts\print3d.exe` on Windows) — `uv run print3d` works too.
 
 ## Table of contents
 
@@ -37,8 +37,8 @@
 
 | Item | Requirement | Notes |
 | --- | --- | --- |
-| Python | 3.11+ | CI covers 3.11 / 3.13 |
-| System | macOS / Linux | Windows is not supported: the CAD and slicing workers rely on POSIX process groups and `resource` |
+| Python | 3.11+ | 3.11 / 3.12 / 3.13 all work |
+| System | macOS / Linux / Windows 10–11 x64 | Subprocess isolation on Windows is a Job Object plus a wall-clock timeout, without POSIX `rlimit`; see §11 |
 | [uv](https://docs.astral.sh/uv/) | Recommended | Your own venv + `pip` works too |
 | Disk | About 250 MB and up | build123d / OCP are the bulk of it |
 | Blender (optional) | 3.x+ | Required by `blender_run`, `mesh_fit` |
@@ -51,16 +51,16 @@
 You do not have to type every command yourself. Copy the block below (GitHub has a copy button in the top-right corner of a code block) and hand it to an agent that can run commands:
 
 ```text
-You are my installation assistant. Install the Print3D MCP server on this macOS/Linux machine:
+You are my installation assistant. Install the Print3D MCP server on this macOS / Linux / Windows machine:
 
 Repository: https://github.com/ThinkArtWork/Print3D
-Dependencies: Python 3.11+, git, uv; Windows is not supported.
+Dependencies: Python 3.11+, git, uv.
 
 1. Check the system and dependencies; if uv is missing, install it the official way; if Python is too old, tell me — do not change the system Python on your own.
 2. Clone the repository to a suitable directory, then run uv sync and uv run print3d init.
 3. Run uv run print3d capabilities and report CAD, rendering, slicer and printer status.
 4. Check whether OrcaSlicer and Blender are installed; if missing, only report it — do not download large files automatically.
-5. Generate a stdio config for my MCP host (DSH / Claude Desktop / Cursor); set command to the absolute path of .venv/bin/print3d inside the repository, and show it to me for confirmation before writing.
+5. Generate a stdio config for my MCP host (DSH / Claude Desktop / Cursor); set command to the absolute path of print3d inside the repository virtualenv (.venv/bin/print3d on macOS/Linux, .venv\Scripts\print3d.exe on Windows), and show it to me for confirmation before writing.
 6. Do not ask for API keys; core features do not need one. Finally, give me a test prompt.
 ```
 
@@ -73,12 +73,24 @@ uv sync
 uv run print3d version
 ```
 
+Windows uses the same commands; only the entry point moves to `.venv\Scripts\` (PowerShell):
+
+```powershell
+git clone https://github.com/ThinkArtWork/Print3D.git
+cd Print3D
+uv sync
+.\.venv\Scripts\print3d.exe version
+```
+
 `uv sync` creates `.venv` and installs the runtime dependencies. To run lint, add the dev dependencies:
 
 ```bash
 uv sync --extra dev
 uv run ruff check src
 ```
+
+> On Windows, an OrcaSlicer `--help` that prints nothing does not break slicing: Print3D only trusts the help text when there is some, and otherwise treats the CLI flags as unverified and carries on.<br>
+> Windows needs 64-bit Python; `cadquery-ocp-novtk` has no win_arm64 wheel, so Windows on ARM is not supported yet.
 
 > Print3D has not been published to PyPI yet. Until the first GitHub Release appears, do not use `pipx install print3d`; installing from source is the only reliable way. Once a release is out, you can also `uv tool install .` or `pipx install .` to put the command on your PATH.
 
@@ -147,8 +159,8 @@ Add an entry to the host's MCP configuration:
 
 Two things people trip over:
 
-- **The command must be an absolute path.** The host will not `cd` into the repository for you, and will not expand `~`.
-- If you want the workspace to follow the project, point `PRINT3D_WORKSPACE` at the project's `.print3d`; otherwise `~/.print3d` is used.
+- **The command must be an absolute path.** The host will not `cd` into the repository for you, and will not expand `~`. On Windows, point `command` at the repository's `.venv\Scripts\print3d.exe` and write backslashes as `\\` in the JSON.
+- If you want the workspace to follow the project, point `PRINT3D_WORKSPACE` at the project's `.print3d`; otherwise `~/.print3d` is used (`%USERPROFILE%\.print3d` on Windows).
 
 ### 2.2 DSH
 
@@ -336,6 +348,8 @@ The script contract (`model_build` runs static checks first):
 7. Scripts are capped at 64 KiB.
 
 Static analysis is defence in depth; the real isolation is the subprocess: its own process group, CPU/file/handle limits, a timeout SIGKILL and an environment allowlist. Do not treat it as a multi-tenant sandbox — it assumes the person running the script is you.
+
+On Windows that chain becomes: the child joins a Job Object (closed, it kills the whole tree), pipes are decoded as UTF-8, and a timeout calls `TerminateJobObject`; there are **no** CPU-time, file-size or handle limits, only the wall-clock budget. The `sandbox` field of `print3d capabilities` reports what this machine actually enforces — do not assume parity with macOS / Linux.
 
 **Editing an existing STEP:**
 
@@ -795,13 +809,15 @@ Use different `--workspace` / `PRINT3D_WORKSPACE` values to isolate assets, jobs
 1. **Read-only tools are free**: `capabilities`, `system_status`, `job_status`, `asset_list`, `model_show`, `printability_check`, `orientation_plan` need no confirmation and return `writes_performed: false`; `model_preview` only writes the preview cache.
 2. **Writes require exact confirmation**: confirmation strings are compared character by character; a mismatch returns `confirmation_mismatch` and writes no files. Do not assemble `confirm` from memory — copy it from `slice_plan` or a tool result.
 3. **Path sandbox**: except for `reference_import` reading an image you specify, every user-supplied path is resolved (symlinks included) and validated; an escape returns `path_outside_workspace`. `asset_export`'s `out_path` cannot write outside the workspace either.
-4. **Script policy + subprocess isolation**: build123d scripts pass an AST allowlist first, then run in a separate process group with CPU/file/handle limits, a timeout SIGKILL and a clean environment. bpy scripts are reviewed and then run the same way. Static review is defence in depth, not a multi-tenant sandbox.
+4. **Script policy + subprocess isolation**: build123d scripts pass an AST allowlist first, then run in a separate process group with CPU/file/handle limits, a timeout SIGKILL and a clean environment. bpy scripts are reviewed and then run the same way. Static review is defence in depth, not a multi-tenant sandbox. On Windows the child runs in a Job Object and a timeout kills the whole tree, but there are no CPU/file-size/handle limits — `capabilities.sandbox` is the authoritative answer.
 5. **Bounded downloads**: cloud model downloads accept only http(s), limit the number of redirects and count bytes as they stream; concept image URLs have size limits too. HTTP mode compares Bearer tokens in constant time.
 6. **No arbitrary G-code**: `send` accepts only slicer output, checks before uploading, and does not retry automatically.
 7. **Secrets never reach the logs**: read only from environment variables or `secrets.json`, with uniform redaction on output.
 8. **Local by default**: apart from explicitly calling cloud generation, modelling, rendering and slicing all happen on your machine; sending goes only to your printer.
 
 **It is not a service for untrusted users.** Do not expose HTTP mode to the public internet; on shared machines keep workspace and secrets permissions tight; cloud generation sends the prompt/image to a third party, so use the local path for sensitive content.
+
+The `sandbox` field of `print3d capabilities` is exactly what this machine enforces (`wall_clock_timeout`, `tree_kill`, `kill_method`, `cpu_time_limit`, `file_size_limit`, `open_file_limit`). The last three are `false` on Windows — that is a fact about the platform, not a setting; if you need strict quotas, run model builds on macOS/Linux.
 
 ---
 
