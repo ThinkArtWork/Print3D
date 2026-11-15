@@ -152,10 +152,7 @@ Two things people trip over:
 
 ### 2.2 DSH
 
-There are two routes in DSH; the first is recommended:
-
-1. **mcp-manager**: add a stdio server under `Settings → MCP` and put the absolute path above in the command field. If your DSH version has no MCP settings page, edit the profile's `cordis.patch.yml` directly, using `mcp-manager` as the entry `id`, then restart DSH.
-2. **Custom bundle**: install the repository's [`dsh-print3d-mcp/`](../dsh-print3d-mcp/README.en.md). It calls `print3d` from PATH by default; if you only use the `uv sync` virtualenv, remember to change the bundle's `command` to the absolute path.
+In DSH, add a stdio server under `Settings → MCP` and put the absolute path above in the command field. If your DSH version has no MCP settings page, edit the profile's `cordis.patch.yml` directly, using `mcp-manager` as the entry `id`, then restart DSH.
 
 ### 2.3 streamable HTTP
 
@@ -964,7 +961,7 @@ uv sync --extra dev
 uv run python -m pytest -q
 ```
 
-Restart the host so that it relaunches `print3d serve --stdio`. If you updated the `dsh-print3d-mcp/` bundle, reinstall/reload it in DSH as well.
+Restart the host so that it relaunches `print3d serve --stdio`. If you updated Print3D itself, run `uv sync` again, then restart.
 
 ### 15.2 Backup
 
@@ -993,6 +990,5 @@ If a key has ever been in a shared environment or a log, **rotate** it in the pr
 
 ## 16. More documentation
 
-- [README](../README.en.md) — project overview, features, quick start, tool list
+- [README](../README.en.md) — project overview, features, quick start
 - [Manual (中文)](MANUAL.md) — the Chinese version of this manual
-- [DSH bundle](../dsh-print3d-mcp/README.en.md) — install Print3D into DeepSeek Harness

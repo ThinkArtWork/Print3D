@@ -152,10 +152,7 @@ Print3D 是一个标准 MCP server，本身没有 UI。宿主（DSH、Claude Des
 
 ### 2.2 DSH
 
-DSH 有两条路，推荐第一条：
-
-1. **mcp-manager**：在 `Settings → MCP` 里新增 stdio 服务器，命令填上面的绝对路径。若当前 DSH 版本没有 MCP 设置页，直接改 profile 的 `cordis.patch.yml`，条目 `id` 用 `mcp-manager`，改完重启 DSH。
-2. **自定义 bundle**：安装仓库里的 [`dsh-print3d-mcp/`](../dsh-print3d-mcp/README.md)。它默认调用 PATH 上的 `print3d`；如果只用 `uv sync` 的虚拟环境，记得把 bundle 里的 `command` 改成绝对路径。
+在 DSH 的 `Settings → MCP` 里新增 stdio 服务器，命令填上面的绝对路径。若当前 DSH 版本没有 MCP 设置页，直接改 profile 的 `cordis.patch.yml`，条目 `id` 用 `mcp-manager`，改完重启 DSH。
 
 ### 2.3 streamable HTTP
 
@@ -964,7 +961,7 @@ uv sync --extra dev
 uv run python -m pytest -q
 ```
 
-重启宿主，让它重新拉起 `print3d serve --stdio`。如果更新了 `dsh-print3d-mcp/` bundle，也要在 DSH 里重装/重载。
+重启宿主，让它重新拉起 `print3d serve --stdio`；如果更新了 Print3D 本身，先重新 `uv sync`，再重启。
 
 ### 15.2 备份
 
@@ -993,7 +990,5 @@ rm -rf ~/.print3d
 
 ## 16. 更多文档
 
-- [README](../README.md) —— 项目概览、功能、快速开始、工具一览
+- [README](../README.md) —— 项目概览、功能、快速开始
 - [Manual (English)](MANUAL.en.md) —— 本手册的英文版
-- [DSH bundle](../dsh-print3d-mcp/README.md) —— 把 Print3D 装进 DeepSeek Harness
-- [DSH bundle (English)](../dsh-print3d-mcp/README.en.md) —— 英文说明
