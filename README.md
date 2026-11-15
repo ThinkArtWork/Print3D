@@ -28,7 +28,7 @@ MIT · Python 3.11+ · macOS / Linux · [使用手册](docs/MANUAL.md) · [Engli
 
 ## 安装
 
-需要 Python 3.11+、git、macOS 或 Linux。[uv](https://docs.astral.sh/uv/) 是推荐安装方式。切片和 Blender 路径还需要两个本机工具：
+需要 Python 3.11+、git、macOS 或 Linux。推荐安装方式[uv](https://docs.astral.sh/uv/) 。还需要安装两个本机工具(切片和 Blender)：
 
 | 依赖 | 用途 | 不装会怎样 |
 | --- | --- | --- |
