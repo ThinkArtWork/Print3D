@@ -1147,6 +1147,28 @@ def build_command(
     return command
 
 
+def _run_slicer(
+    command: list[str], *, outdir: Path, budget: float
+) -> tuple[int | None, str, str, bool]:
+    """Run the slicer CLI once: ``(exit_code, stdout, stderr, timed_out)``."""
+
+    try:
+        with processes.child(command, cwd=str(outdir), env=clean_env()) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=budget)
+            except subprocess.TimeoutExpired:
+                processes.terminate_tree(process)
+                stdout, stderr = process.communicate()
+                return None, stdout or "", stderr or "", True
+            return process.returncode, stdout or "", stderr or "", False
+    except OSError as exc:
+        raise AdapterUnavailable(f"Could not start the slicer: {exc}") from exc
+
+
+def _gcode_outputs(outdir: Path) -> list[Path]:
+    return sorted(outdir.glob("*.gcode"), key=lambda item: item.stat().st_mtime)
+
+
 def slice_stl(
     stl: Path,
     target: TargetSettings,
@@ -1184,32 +1206,39 @@ def slice_stl(
     outdir = workdir / "output"
     outdir.mkdir(parents=True, exist_ok=True)
     budget = float(timeout_s or target.timeout_s or DEFAULT_TIMEOUT_S)
+    # A slicer can support a flag without being able to say so: OrcaSlicer on
+    # Windows exits 0 with no --help output.  When the flags are unverified, ask
+    # for the statistics file anyway and drop the flag if the run yields G-code.
+    attempt_statistics = info.supports_statistics or not info.help_text_verified
     command = build_command(
         binary,
         prepared,
         stl=stl,
         outdir=outdir,
-        supports_statistics=info.supports_statistics,
+        supports_statistics=attempt_statistics,
     )
 
     started = time.monotonic()
-    timed_out = False
-    stdout = stderr = ""
-    exit_code: int | None = None
-    try:
-        with processes.child(command, cwd=str(outdir), env=clean_env()) as process:
-            try:
-                stdout, stderr = process.communicate(timeout=budget)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                processes.terminate_tree(process)
-                stdout, stderr = process.communicate()
-            exit_code = process.returncode
-    except OSError as exc:
-        raise AdapterUnavailable(f"Could not start the slicer: {exc}") from exc
+    exit_code, stdout, stderr, timed_out = _run_slicer(command, outdir=outdir, budget=budget)
+    retry_note: str | None = None
+    if attempt_statistics and not timed_out and not _gcode_outputs(outdir):
+        retry_note = (
+            "the slicer did not accept --export-statistics (no G-code); "
+            "it was sliced again without the flag"
+        )
+        command = build_command(
+            binary,
+            prepared,
+            stl=stl,
+            outdir=outdir,
+            supports_statistics=False,
+        )
+        exit_code, stdout, stderr, timed_out = _run_slicer(
+            command, outdir=outdir, budget=budget
+        )
     elapsed = time.monotonic() - started
 
-    gcodes = sorted(outdir.glob("*.gcode"), key=lambda item: item.stat().st_mtime)
+    gcodes = _gcode_outputs(outdir)
     statistics: dict[str, Any] = {}
     stats_files = sorted(
         (item for item in outdir.iterdir() if STATISTICS_RE.match(item.name)),
@@ -1221,6 +1250,9 @@ def slice_stl(
         except (OSError, ValueError):
             statistics = {}
 
+    warnings = list(prepared.warnings)
+    if retry_note:
+        warnings.append(retry_note)
     result = SliceResult(
         ok=False,
         exit_code=exit_code,
@@ -1229,7 +1261,7 @@ def slice_stl(
         stderr=stderr,
         command=command,
         timed_out=timed_out,
-        warnings=list(prepared.warnings),
+        warnings=warnings,
         prepared=prepared,
     )
 
@@ -1306,12 +1338,12 @@ def slice_stl(
             f"target says {target.printer_model!r}"
         )
 
-    result.ok = process.returncode == 0
+    result.ok = exit_code == 0
     result.gcode = gcode
     result.metadata = metadata
     result.statistics = statistics
     if not result.ok:
-        result.error = f"slicer exited with code {process.returncode}"
+        result.error = f"slicer exited with code {exit_code}"
         result.hint = (stderr or stdout)[-1200:].strip() or None
     return result
 
