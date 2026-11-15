@@ -254,6 +254,7 @@ This script gives you a 40 × 40 × 10 mm block with an 8 mm through-hole in the
     "solids": 1,
     "faces": 7,
     "triangles": 520,
+    "degenerate_triangles": 0,
     "boundary_edges": 0,
     "nonmanifold_edges": 0
   }
@@ -266,6 +267,8 @@ How to read it (everything is under `checks`):
 2. `watertight == true` and `boundary_edges == 0`: closed;
 3. `bbox_mm` / `volume_cm3`: whether size and volume match expectations;
 4. `nonmanifold_edges == 0`: no non-manifold edges.
+
+`degenerate_triangles` counts zero-area faces (three coincident vertices). They are common at fillet and chamfer seams, do not affect printing, and take no part in the verdict above — the field only reports them. So a non-zero value is **not** a reason to change the script; `watertight: true` still means the surface is closed.
 
 If any one of them is off, fix the script before slicing; do not gamble in the slicer.
 
@@ -854,7 +857,8 @@ Every failed tool returns one envelope:
 | CAD unavailable in `capabilities` | Whether `.venv` has build123d installed; the interpreter reported by `print3d --version` and `capabilities.cad` |
 | Script static review fails | Whether the first line is `from build123d import *`; whether a `_` attribute, `eval`/`open`/`getattr` is used; whether a module outside the allowlist is imported |
 | Build fails with no visible reason | The build result has `stdout` / `stderr` / `exit_code`; reproduce in `/tmp` with `print3d cad run` first |
-| `watertight: false` / `boundary_edges > 0` | An open shell or unmerged solids; check booleans, `fillet` and imported meshes |
+| `watertight: false` / `boundary_edges > 0` | An open shell or unmerged solids; check booleans, `fillet` and imported meshes. Read `degenerate_triangles` first: the verdict already excludes those zero-area faces, so `false` here is a real problem |
+| `degenerate_triangles > 0` (with `watertight: true`) | Zero-area faces at fillet and chamfer seams; they do not affect printing and need no script change |
 | `solids > 1` | Several non-touching solids; merge them with `union`, or split them into several assets |
 | The model is not on the bed | Whether the bbox exceeds the target bed; whether the part's bottom face is at `z=0` |
 | Cloud provider not ready | Whether the key is in an environment variable / `secrets.json`; the source reported by `capabilities.providers.cloud` |

@@ -49,6 +49,13 @@ def _stl_mesh_stats(path: Path) -> dict[str, Any] | None:
     A printable mesh has every edge shared by exactly two triangles.  We quantise
     vertices to 0.1 µm before counting, which removes float noise from the CAD
     kernel without merging distinct features.
+
+    Zero-area faces are counted separately and left out of the edge tally.  The
+    tessellator emits them where a fillet patch meets its neighbours; their three
+    vertices collapse onto one point, so the collapsed edges look like an
+    unshared edge (a hole) or an edge used twice by the same face (a
+    non-manifold seam) even though the surface is closed.  They carry no area, so
+    slicers ignore them and the print is unaffected.
     """
 
     try:
@@ -64,12 +71,18 @@ def _stl_mesh_stats(path: Path) -> dict[str, Any] | None:
         return None
 
     edges: dict[tuple[tuple[float, float, float], tuple[float, float, float]], int] = {}
+    degenerate = 0
+    used = 0
     for index in range(triangles):
         base = 84 + index * 50 + 12
         points = []
         for corner in range(3):
             x, y, z = struct.unpack_from("<3f", data, base + corner * 12)
             points.append((round(x, 4), round(y, 4), round(z, 4)))
+        if len(set(points)) < 3:
+            degenerate += 1
+            continue
+        used += 1
         for first, second in ((0, 1), (1, 2), (2, 0)):
             if points[first] <= points[second]:
                 edge = (points[first], points[second])
@@ -81,9 +94,12 @@ def _stl_mesh_stats(path: Path) -> dict[str, Any] | None:
     nonmanifold = sum(1 for count in edges.values() if count > 2)
     return {
         "triangles": triangles,
+        "degenerate_triangles": degenerate,
         "boundary_edges": boundary,
         "nonmanifold_edges": nonmanifold,
-        "watertight": boundary == 0 and nonmanifold == 0,
+        # No usable triangle means no closed surface, however the counts read: an
+        # all-degenerate export must not pass as watertight.
+        "watertight": used > 0 and boundary == 0 and nonmanifold == 0,
     }
 
 

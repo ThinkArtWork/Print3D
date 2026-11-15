@@ -254,6 +254,7 @@ def build_part():
     "solids": 1,
     "faces": 7,
     "triangles": 520,
+    "degenerate_triangles": 0,
     "boundary_edges": 0,
     "nonmanifold_edges": 0
   }
@@ -266,6 +267,8 @@ def build_part():
 2. `watertight == true` 且 `boundary_edges == 0`：封闭；
 3. `bbox_mm` / `volume_cm3`：尺寸和体量是否符合预期；
 4. `nonmanifold_edges == 0`：没有非流形边。
+
+`degenerate_triangles` 是零面积三角形（三个顶点重合）的数量，圆角/倒角接缝处常见，不影响打印，也不参与上面的判定——它只是把这件事如实报出来。所以**看到它非 0 不用改脚本**，只要 `watertight` 是 `true` 就是封闭的。
 
 任何一项不对，先改脚本再切片，不要在切片器里赌。
 
@@ -854,7 +857,8 @@ chmod 600 ~/.print3d/secrets.json
 | `capabilities` 里 CAD 不可用 | `.venv` 是否装好 build123d；`print3d --version` 与 `capabilities.cad` 的 interpreter |
 | 脚本静态审查报错 | 第一行是否 `from build123d import *`；是否用了 `_` 属性、`eval`/`open`/`getattr`；是否 import 了白名单外模块 |
 | 构建失败但看不到原因 | 构建返回里有 `stdout` / `stderr` / `exit_code`；先在 `/tmp` 用 `print3d cad run` 复现 |
-| `watertight: false` / `boundary_edges > 0` | 有开放壳体或未合并实体；检查布尔、`fillet`、导入网格 |
+| `watertight: false` / `boundary_edges > 0` | 有开放壳体或未合并实体；检查布尔、`fillet`、导入网格。先看 `degenerate_triangles`：它不为 0 时判定已经把这些零面积面排除，仍报 `false` 才是真问题 |
+| `degenerate_triangles > 0`（`watertight: true`） | 圆角/倒角接缝处的零面积面，不影响打印，不用改脚本 |
 | `solids > 1` | 多个不接触实体；用 `union` 合并，或拆成多个资产 |
 | 模型不在热床上 | bbox 是否超出 target bed；零件底面是否在 `z=0` |
 | 云端 provider 不 ready | key 是否在环境变量 / `secrets.json`；`capabilities.providers.cloud` 的 source |

@@ -21,7 +21,13 @@ def _num(value) -> float:
 
 
 def mesh_stats(triangles: np.ndarray) -> dict[str, Any]:
-    """Summarise a triangle soup: bbox, volume, area and watertightness."""
+    """Summarise a triangle soup: bbox, volume, area and watertightness.
+
+    Zero-area faces are counted separately and left out of the edge tally: they
+    are a tessellation artefact where a fillet meets its neighbours, and their
+    collapsed edges would otherwise read as a hole.  ``mesh_stats`` and the
+    build123d worker report the same numbers on purpose.
+    """
 
     tris = np.asarray(triangles, dtype=np.float64)
     if tris.ndim != 3 or tris.shape[1] != 3 or tris.shape[2] != 3:
@@ -45,13 +51,25 @@ def mesh_stats(triangles: np.ndarray) -> dict[str, Any]:
     quantised = np.round(vertices, 4)
     _, inverse = np.unique(quantised, axis=0, return_inverse=True)
     faces = inverse.reshape(-1, 3).astype(np.int64)
-    edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
-    edges = np.sort(edges, axis=1)
-    n_vertices = int(inverse.max()) + 1 if inverse.size else 0
-    keys = edges[:, 0] * max(n_vertices, 1) + edges[:, 1]
-    _, counts = np.unique(keys, return_counts=True)
-    boundary = int((counts == 1).sum())
-    nonmanifold = int((counts > 2).sum())
+    # Drop faces whose vertices collapse onto fewer than three points; keeping
+    # them would add phantom boundary or non-manifold edges.
+    distinct = (
+        (faces[:, 0] != faces[:, 1])
+        & (faces[:, 1] != faces[:, 2])
+        & (faces[:, 0] != faces[:, 2])
+    )
+    degenerate = int((~distinct).sum())
+    faces = faces[distinct]
+    if faces.size:
+        edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
+        edges = np.sort(edges, axis=1)
+        n_vertices = int(inverse.max()) + 1 if inverse.size else 0
+        keys = edges[:, 0] * max(n_vertices, 1) + edges[:, 1]
+        _, counts = np.unique(keys, return_counts=True)
+        boundary = int((counts == 1).sum())
+        nonmanifold = int((counts > 2).sum())
+    else:
+        boundary = nonmanifold = 0
 
     return {
         "triangles": int(len(tris)),
@@ -62,9 +80,10 @@ def mesh_stats(triangles: np.ndarray) -> dict[str, Any]:
         "volume_mm3": _num(volume),
         "volume_cm3": _num(volume / 1000.0),
         "area_mm2": _num(area),
+        "degenerate_triangles": degenerate,
         "boundary_edges": boundary,
         "nonmanifold_edges": nonmanifold,
-        "watertight": boundary == 0 and nonmanifold == 0,
+        "watertight": bool(len(faces)) and boundary == 0 and nonmanifold == 0,
         "is_valid": True,
     }
 
