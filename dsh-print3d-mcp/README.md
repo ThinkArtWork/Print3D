@@ -1,5 +1,7 @@
 # dsh-print3d-mcp
 
+[中文](README.md) · [English](README.en.md)
+
 把本机 Print3D MCP 服务挂到 [DeepSeek Harness](https://github.com/deepseek-ai) 上的配置文件型 bundle。只含一个 patch，不含任何运行代码。
 
 ## 安装
@@ -15,7 +17,8 @@ cd /path/to/Print3D && .venv/bin/pip install -e .        # 从源码
 ```
 
 若用虚拟环境且不想改 PATH，把 `cordis.patch.yml` 里的 `command: print3d` 换成
-`/path/to/Print3D/.venv/bin/print3d` 绝对路径（DSH 不展开 `~`）。
+`/path/to/Print3D/.venv/bin/print3d` 绝对路径（DSH 不展开 `~`；也不建议用相对路径，
+因为 DSH 启动进程时的工作目录不保证是仓库根目录）。
 
 安装后在任意会话里应能看到并调用：
 

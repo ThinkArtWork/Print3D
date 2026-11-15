@@ -12,7 +12,7 @@ Modelling, preview, slicing and printing all happen through MCP tools; models, G
 [![MCP](https://img.shields.io/badge/MCP-server-6f42c1)](https://modelcontextprotocol.io/)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey)](#status-and-limitations)
 
-[中文](README.md) · [English](README.en.md) · [Overview](docs/INTRO.en.md) · [Quick start](#quick-start) · [Modelling paths](#modelling-paths) · [Tools](#tools) · [Configuration](#configuration) · [Security](#security-boundaries) · [Manual](docs/MANUAL.md) · [Docs](#documentation)
+[中文](README.md) · [English](README.en.md) · [Quick start](#quick-start) · [Modelling paths](#modelling-paths) · [Tools](#tools) · [Configuration](#configuration) · [Security](#security-boundaries) · [Manual](docs/MANUAL.en.md) · [Docs](#documentation)
 
 </div>
 
@@ -83,7 +83,7 @@ uv sync
 uv run print3d init
 ```
 
-Prefer not to run commands? Hand the repository to an agent that can execute them, using the install prompt in the [product intro](docs/INTRO.en.md).
+Prefer not to run commands? Hand the repository to an agent that can execute them, using the install prompt in §1.2 of the [Manual](docs/MANUAL.en.md).
 
 `print3d init` creates `~/.print3d/` (configuration + asset directories) and does not overwrite existing configuration; add `--force` to rewrite it.
 
@@ -295,7 +295,7 @@ Use `printer_save`; you do not need to edit `config.json` by hand:
 }
 ```
 
-For Bambu LAN access codes and OctoPrint API keys, point `access_code_env` / `api_key_env` at environment variables. Slicing targets (Orca machine / process / filament profiles, build plate, material) live under `targets.<id>`. See the [Reference](docs/GUIDE.md) for all fields and the U1 multi-toolhead example, and the [Manual](docs/MANUAL.md) for everyday setup.
+For Bambu LAN access codes and OctoPrint API keys, point `access_code_env` / `api_key_env` at environment variables. Slicing targets (Orca machine / process / filament profiles, build plate, material) live under `targets.<id>`. See [Manual](docs/MANUAL.en.md) §8.1 for all fields and §9.1 for the U1 multi-toolhead example.
 
 ## Security boundaries
 
@@ -308,7 +308,7 @@ For Bambu LAN access codes and OctoPrint API keys, point `access_code_env` / `ap
 
 ## Status and limitations
 
-- **Alpha (v0.1.x)**: interfaces may still change; not yet on PyPI. Install from source for now; see [docs/RELEASE.md](docs/RELEASE.md).
+- **Alpha (v0.1.x)**: interfaces may still change; not yet on PyPI. Install from source for now; releases are published on GitHub Releases.
 - **macOS / Linux**: relies on POSIX process groups and `resource` limits; Windows is unusable.
 - The modelling loop, OrcaSlicer slicing, Moonraker upload and real Snapmaker U1 printing have been verified end to end.
 - OctoPrint / Bambu LAN / PrusaLink adapters are implemented with simulated tests; Bambu LAN and PrusaLink have not been verified on hardware.
@@ -323,19 +323,15 @@ uv run ruff format --check .
 uv run pytest -q
 ```
 
-CI runs ruff and pytest on Python 3.11 / 3.13, then builds a wheel and smoke-tests it in a clean venv. Tagging and release steps are in [docs/RELEASE.md](docs/RELEASE.md). Issues and PRs are welcome; read the [design doc](docs/DESIGN.md) before changing things, and run the commands above before submitting.
+CI runs ruff and pytest on Python 3.11 / 3.13, then builds a wheel and smoke-tests it in a clean venv. Issues and PRs are welcome; run the commands above before submitting.
 
 ## Documentation
 
-The detailed manual and reference are currently in Chinese; the English overview is available.
-
-- [Overview](docs/INTRO.en.md) · [Chinese overview](docs/INTRO.md) — features, install, supported / not supported
-- [Manual](docs/MANUAL.md) — install, host wiring, modelling paths, slicing and printing, configuration, troubleshooting (Chinese)
-- [Reference](docs/GUIDE.md) — every slicing parameter, printer adapter details, development measurements and roadmap (Chinese)
-- [Design](docs/DESIGN.md) — architecture, modules, tool surface, data model (Chinese)
-- [Plan](docs/PLAN.md) — milestones, acceptance criteria, risks (Chinese)
-- [Release](docs/RELEASE.md) — packaging, tagging, smoke tests (Chinese)
-- [DSH bundle](dsh-print3d-mcp/README.md) — install Print3D into DeepSeek Harness (Chinese)
+- [中文 README](README.md) — the Chinese original
+- [Manual](docs/MANUAL.en.md) — install, host wiring, modelling paths, slicing and printing, configuration, troubleshooting
+- [中文使用手册](docs/MANUAL.md) — the Chinese manual
+- [DSH bundle](dsh-print3d-mcp/README.en.md) — install Print3D into DeepSeek Harness
+- [中文 DSH 说明](dsh-print3d-mcp/README.md) — the Chinese DSH bundle guide
 
 ## License
 

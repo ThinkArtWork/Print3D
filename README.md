@@ -12,7 +12,7 @@
 [![MCP](https://img.shields.io/badge/MCP-server-6f42c1)](https://modelcontextprotocol.io/)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey)](#状态与限制)
 
-[中文](README.md) · [English](README.en.md) · [产品简介](docs/INTRO.md) · [快速开始](#快速开始) · [建模路径](#建模路径) · [工具一览](#工具一览) · [配置](#配置) · [安全边界](#安全边界) · [使用手册](docs/MANUAL.md) · [文档](#文档)
+[中文](README.md) · [English](README.en.md) · [快速开始](#快速开始) · [建模路径](#建模路径) · [工具一览](#工具一览) · [配置](#配置) · [安全边界](#安全边界) · [使用手册](docs/MANUAL.md) · [文档](#文档)
 
 </div>
 
@@ -83,7 +83,7 @@ uv sync
 uv run print3d init
 ```
 
-不想自己敲命令？把仓库链接交给能执行命令的 Agent，让它按[产品简介](docs/INTRO.md)里的安装提示词代劳。
+不想自己敲命令？把仓库链接交给能执行命令的 Agent，让它按[使用手册](docs/MANUAL.md) §1.2 的安装提示词代劳。
 
 `print3d init` 会创建 `~/.print3d/`（配置 + 资产目录），不会覆盖已有配置；加 `--force` 才会重写。
 
@@ -295,7 +295,7 @@ export OPENAI_API_KEY=...
 }
 ```
 
-Bambu LAN 的 access code、OctoPrint 的 API key 分别用 `access_code_env` / `api_key_env` 指向环境变量。切片目标（Orca 的 machine / process / filament 预设、床型、材料）写在 `targets.<id>`，完整字段和 U1 的多工具头示例见[完整参考](docs/GUIDE.md)，日常配置步骤见[使用手册](docs/MANUAL.md)。
+Bambu LAN 的 access code、OctoPrint 的 API key 分别用 `access_code_env` / `api_key_env` 指向环境变量。切片目标（Orca 的 machine / process / filament 预设、床型、材料）写在 `targets.<id>`，完整字段见[使用手册](docs/MANUAL.md) §8.1，U1 的多工具头示例见 §9.1。
 
 ## 安全边界
 
@@ -308,7 +308,7 @@ Bambu LAN 的 access code、OctoPrint 的 API key 分别用 `access_code_env` / 
 
 ## 状态与限制
 
-- **Alpha（v0.1.x）**：接口仍可能变化，尚未发布到 PyPI；当前从源码安装，发版流程见 [docs/RELEASE.md](docs/RELEASE.md)。
+- **Alpha（v0.1.x）**：接口仍可能变化，尚未发布到 PyPI；当前从源码安装；发版使用 GitHub Releases。
 - **macOS / Linux**：依赖 POSIX 进程组与 `resource` 限额，Windows 不可用。
 - 建模闭环、OrcaSlicer 切片、Moonraker 发送与 Snapmaker U1 真机打印已端到端验证。
 - OctoPrint / Bambu LAN / PrusaLink 适配器已实现并有模拟测试；Bambu LAN 与 PrusaLink 尚未做真机验证。
@@ -323,18 +323,15 @@ uv run ruff format --check .
 uv run pytest -q
 ```
 
-CI 在 Python 3.11 / 3.13 上跑 ruff、pytest，再构建 wheel 并在干净 venv 里做冒烟测试。打标签与发版步骤见 [docs/RELEASE.md](docs/RELEASE.md)。欢迎 issue 和 PR；改动前先读 [设计文档](docs/DESIGN.md)，提交前跑一遍上面的命令。
+CI 在 Python 3.11 / 3.13 上跑 ruff、pytest，再构建 wheel 并在干净 venv 里做冒烟测试。欢迎 issue 和 PR；提交前跑一遍上面的命令。
 
 ## 文档
 
 - [English README](README.en.md) —— 同一份 README 的英文版
-- [产品简介与安装使用](docs/INTRO.md) · [English](docs/INTRO.en.md) —— 功能、安装、支持与不支持
 - [使用手册](docs/MANUAL.md) —— 安装、宿主接入、建模路径、切片与上机、配置、故障排查
-- [完整参考](docs/GUIDE.md) —— 全部切片参数、打印机适配细节、开发期实测记录与路线图
-- [设计文档](docs/DESIGN.md) —— 架构、模块、工具面、数据模型
-- [开发计划](docs/PLAN.md) —— 里程碑、验收标准、风险
-- [发版流程](docs/RELEASE.md) —— 打包、打标签、冒烟测试
+- [Manual (English)](docs/MANUAL.en.md) —— 使用手册英文版
 - [DSH bundle](dsh-print3d-mcp/README.md) —— 把 Print3D 装进 DeepSeek Harness
+- [DSH bundle (English)](dsh-print3d-mcp/README.en.md) —— 英文说明
 
 ## License
 

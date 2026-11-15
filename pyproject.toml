@@ -33,7 +33,7 @@ dev = [
   "pytest>=8.0",
   "respx>=0.21",
   "ruff>=0.6",
-  # httpx needs this when the shell exports ALL_PROXY=socks5://... (docs/RELEASE.md 0.1)
+  # httpx needs this when the shell exports ALL_PROXY=socks5://... (0.1 release note)
   "socksio>=1.0",
 ]
 

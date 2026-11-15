@@ -1,10 +1,12 @@
 # Print3D 使用手册
 
+[中文](MANUAL.md) · [English](MANUAL.en.md)
+
 > 这是一份面向使用者的操作手册：从安装、接入 MCP 宿主，到建模、预览、切片、上机，以及出错时先查哪里。
 >
-> - 想先了解产品全貌与安装步骤：看[产品简介与安装使用](INTRO.md)。
-> - 只想尽快跑起来：看 [README](../README.md) 的「快速开始」。
-> - 想看实现细节、全部切片参数、开发期实测记录：看[完整参考](GUIDE.md)。
+> - 想先了解项目全貌：看 [README](../README.md) 的「快速开始」与「工具一览」。
+> - 只想尽快跑起来：用 §1.2 的 Agent 安装提示词，或按 §1.3 手动安装。
+> - 需要全部切片参数与打印机字段：见 §8、§9；排错见 §12。
 >
 > 文中命令默认在仓库根目录执行；`print3d` 指仓库虚拟环境里的 `.venv/bin/print3d`，用 `uv run print3d` 也可以。
 
@@ -44,7 +46,25 @@
 
 **不需要任何 API key**，也能完成参数化建模、预览、可打印性检查和导出。key 只影响概念图、云端生成等可选路径。
 
-### 1.2 从源码安装
+### 1.2 交给 Agent 安装（推荐新手）
+
+不用自己逐条敲命令。复制下面这段（GitHub 代码块右上角有复制按钮）交给能执行命令的 Agent：
+
+```text
+你是我的安装助手。请在这台 macOS/Linux 机器上安装 Print3D MCP 服务：
+
+仓库：https://github.com/ThinkArtWork/Print3D
+依赖：Python 3.11+、git、uv；Windows 不支持。
+
+1. 检查系统和依赖；缺 uv 就按官方方式安装；Python 版本不够就告诉我，不要擅自改系统 Python。
+2. 克隆仓库到合适目录，执行 uv sync 和 uv run print3d init。
+3. 运行 uv run print3d capabilities，报告 CAD、渲染、切片器、打印机状态。
+4. 检查 OrcaSlicer 和 Blender 是否安装；缺失只报告，不要自动下载大文件。
+5. 根据我的 MCP 宿主（DSH / Claude Desktop / Cursor）生成 stdio 配置；command 使用仓库内 .venv/bin/print3d 的绝对路径，写入前先给我确认。
+6. 不要索要 API key，核心功能不需要。最后给我一条测试提示词。
+```
+
+### 1.3 从源码安装
 
 ```bash
 git clone https://github.com/ThinkArtWork/Print3D.git
@@ -62,7 +82,7 @@ uv run python -m pytest -q
 
 > Print3D 尚未发布到 PyPI。在首个 GitHub Release 出现之前，不要用 `pipx install print3d`；源码安装是唯一可靠的方式。Release 发布后，也可以 `uv tool install .` 或 `pipx install .` 把命令装到 PATH。
 
-### 1.3 初始化工作区
+### 1.4 初始化工作区
 
 ```bash
 uv run print3d init
@@ -609,7 +629,7 @@ slice_inspect(slice_id="s_…")
 | `fan_speed` / `aux_fan_speed` / `fan_first_layers` | 模型风扇、辅助/腔体风扇、前几层关风扇 |
 | `printer` + `slot` | 绑定打印机和耗材槽；自动取槽的材质/颜色，材质冲突会拒绝 |
 
-完整的参数语义、各材料的温度、U1 实测调参记录见[完整参考的切片与参数章节](GUIDE.md)。
+材料温度会按 `material` 自动映射；需要精调时用 `bed_temp` / `nozzle_temp` 显式覆盖。U1 的多工具头与耗材槽配置见 §9.3。
 
 ### 8.5 切片常见问题
 
@@ -974,8 +994,6 @@ rm -rf ~/.print3d
 ## 16. 更多文档
 
 - [README](../README.md) —— 项目概览、功能、快速开始、工具一览
-- [完整参考](GUIDE.md) —— 全部切片参数、打印机适配细节、开发期实测记录、路线图
-- [设计文档](DESIGN.md) —— 架构、模块、数据模型、安全边界
-- [开发计划](PLAN.md) —— 里程碑、验收标准、风险
-- [发版流程](RELEASE.md) —— 打包、打标签、冒烟测试
-- [DSH bundle](../dsh-print3d-mcp/README.md) —— 把 Print3D 装进 DSH
+- [Manual (English)](MANUAL.en.md) —— 本手册的英文版
+- [DSH bundle](../dsh-print3d-mcp/README.md) —— 把 Print3D 装进 DeepSeek Harness
+- [DSH bundle (English)](../dsh-print3d-mcp/README.en.md) —— 英文说明
