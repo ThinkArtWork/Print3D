@@ -123,7 +123,7 @@ export PRINT3D_WORKSPACE=/path/to/print3d-workspace
   logs/
   profiles/       # 切片 profile（如你的 U1 预设）
   references/     # 生成的概念图
-  secrets.json    # 可选，权限必须是 0600
+  secrets.json    # 可选；只有你自己可读（见 §10.3）
   slices/         # 切片产物 plate_1.gcode、statistics.json
 ```
 
@@ -796,10 +796,21 @@ provider key 的解析顺序：`api_key_env` 指定的变量 → `PRINT3D_<ID>_A
 ```
 
 ```bash
+# macOS / Linux
 chmod 600 ~/.print3d/secrets.json
 ```
 
-权限过宽会触发 `secrets_insecure` warning。更推荐把 key 放环境变量，尤其是共享机器和 CI。
+```powershell
+# Windows：去掉继承，只留你自己、SYSTEM、Administrators
+icacls "$env:USERPROFILE\.print3d\secrets.json" /inheritance:r /grant:r `
+  "$($env:USERNAME):(F)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)"
+```
+
+macOS / Linux 靠 mode 位，Windows 靠文件 ACL：`print3d` 在 Windows 上启动时会读 DACL，一旦发现 `Everyone` / `Authenticated Users` / `Users` / `Guests` 这类组能读，就发 `secrets_insecure` warning，并提示上面那条 `icacls` 命令。它只检查、不会改你的权限。
+
+**工作区放哪很关键**：默认的 `%USERPROFILE%\.print3d` 从用户目录继承「只有你 + SYSTEM + Administrators」的 ACL，和 `chmod 600` 等效；而放到 `D:\`、`E:\` 这类数据盘时，很多机器给的是 `Authenticated Users: Modify`，同一台机器上的其他用户就能读到 `secrets.json`。要么把工作区留在用户目录，要么按上面的命令收紧。
+
+更推荐把 key 放环境变量，尤其是共享机器和 CI。
 
 ### 10.4 多实例
 
@@ -838,7 +849,7 @@ chmod 600 ~/.print3d/secrets.json
 | --- | --- | --- |
 | `config_missing` | 没找到 `config.json` | `print3d init`，或检查 `PRINT3D_WORKSPACE` / `--workspace` |
 | `config_invalid` | 配置 JSON / 字段不合法 | `print3d config` 看解析结果，按 hint 改字段 |
-| `secrets_insecure` | `secrets.json` 权限过宽 | `chmod 600 <workspace>/secrets.json` |
+| `secrets_insecure` | `secrets.json` 权限过宽 | macOS / Linux：`chmod 600 <workspace>/secrets.json`；Windows：`icacls <workspace>\secrets.json /inheritance:r /grant:r "%USERNAME%:(F)"` |
 | `path_invalid` | 路径格式不对 | 用绝对路径或工作区内相对路径 |
 | `path_outside_workspace` | 路径逃出工作区 | 把文件放进工作区，或改用 `reference_import` |
 | `not_found` | 资产 / 版本 / 文件不存在 | 先 `asset_list` / `model_show`，确认 id 和 revision |

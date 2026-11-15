@@ -123,7 +123,7 @@ The workspace then contains:
   logs/
   profiles/       # slicing profiles (e.g. your U1 preset)
   references/     # generated concept images
-  secrets.json    # optional; permissions must be 0600
+  secrets.json    # optional; readable by you alone (see §10.3)
   slices/         # slicing output: plate_1.gcode, statistics.json
 ```
 
@@ -796,10 +796,31 @@ Secrets are **not written into config.json**. `print3d config` reports only `has
 ```
 
 ```bash
+# macOS / Linux
 chmod 600 ~/.print3d/secrets.json
 ```
 
-Overly broad permissions trigger a `secrets_insecure` warning. Keeping keys in environment variables is preferable, especially on shared machines and in CI.
+```powershell
+# Windows: drop inheritance, keep only you, SYSTEM and Administrators
+icacls "$env:USERPROFILE\.print3d\secrets.json" /inheritance:r /grant:r `
+  "$($env:USERNAME):(F)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)"
+```
+
+macOS and Linux use mode bits; Windows uses the file ACL. On startup `print3d`
+reads the DACL of `secrets.json` and, if a broad group (`Everyone`,
+`Authenticated Users`, `Users`, `Guests`) can read it, raises the
+`secrets_insecure` warning together with the `icacls` command above. It only
+inspects the permissions — it never changes them.
+
+**Where the workspace lives matters**: the default `%USERPROFILE%\.print3d`
+inherits "you + SYSTEM + Administrators" from your profile, which is the
+equivalent of `chmod 600`. On a data drive (`D:\`, `E:\` …) the inherited ACL is
+often `Authenticated Users: Modify`, so any other local user could read
+`secrets.json`. Either keep the workspace in your profile or tighten it with the
+command above.
+
+Keeping keys in environment variables is still preferable, especially on shared
+machines and in CI.
 
 ### 10.4 Multiple instances
 
@@ -838,7 +859,7 @@ Every failed tool returns one envelope:
 | --- | --- | --- |
 | `config_missing` | `config.json` not found | `print3d init`, or check `PRINT3D_WORKSPACE` / `--workspace` |
 | `config_invalid` | Configuration JSON / field is invalid | `print3d config` to see the parse result, then fix the field per the hint |
-| `secrets_insecure` | `secrets.json` permissions are too broad | `chmod 600 <workspace>/secrets.json` |
+| `secrets_insecure` | `secrets.json` permissions are too broad | macOS / Linux: `chmod 600 <workspace>/secrets.json`; Windows: `icacls <workspace>\secrets.json /inheritance:r /grant:r "%USERNAME%:(F)"` |
 | `path_invalid` | Path has the wrong form | Use an absolute path or a path relative to the workspace |
 | `path_outside_workspace` | Path escapes the workspace | Put the file inside the workspace, or use `reference_import` |
 | `not_found` | Asset / revision / file does not exist | `asset_list` / `model_show` first, to confirm the id and revision |

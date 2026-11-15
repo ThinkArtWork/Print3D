@@ -25,6 +25,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .errors import ConfigError
+from .winacl import wide_readers
 from .workspace import DEFAULT_WORKSPACE, Workspace, atomic_write_text
 
 ENV_PREFIX = "PRINT3D_"
@@ -394,13 +395,24 @@ class Secrets:
         if not path.exists():
             return cls({}, path=path, warnings=warnings)
         if os.name == "posix":
-            # Unix mode bits are the only cheap check; on Windows st_mode is a
-            # fiction (every file looks 0o666) and the real protection is the
-            # ACL, so warning there would be a false alarm on every install.
+            # Unix mode bits are the cheap check here.
             mode = stat.S_IMODE(path.stat().st_mode)
             if mode & 0o077:
                 warnings.append(
                     f"secrets.json is accessible by other users (mode {mode:o}); chmod 600."
+                )
+        else:
+            # Windows has no mode bits (every file reports 0o666), so ask the
+            # DACL instead.  It inherits from wherever the workspace lives: a
+            # folder under the profile is owner-only, a data drive usually lets
+            # every local user read.
+            wide = wide_readers(path)
+            if wide:
+                warnings.append(
+                    "secrets.json is readable by "
+                    + ", ".join(wide)
+                    + '; restrict it with: icacls "<path>" /inheritance:r '
+                    '/grant:r "%USERNAME%:(F)"'
                 )
         data = _read_json(path)
         if not isinstance(data, dict):
