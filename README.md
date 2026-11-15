@@ -75,7 +75,7 @@ uv run print3d init
 }
 ```
 
-`command` 必须是绝对路径。核心建模、预览和导出不需要任何 API key；只有概念图、云端生成等可选路径需要：
+`command` 必须是绝对路径。本地建模、预览和导出不需要任何 API key；只有使用概念图、云端生成等功能时需要你预先开通相应的付费账号：
 
 ```bash
 export TRIPO_API_KEY=...          # Tripo AI
@@ -95,13 +95,16 @@ export OPENAI_API_KEY=...         # 概念图 / images provider
 - **切片与打印**：OrcaSlicer；Moonraker/Klipper（含 Snapmaker U1 实机验证）、OctoPrint、Bambu LAN、PrusaLink、通用 HTTP；多工具头/多材料槽。
 - **平台与 Agent**：macOS / Linux；Python 3.11+（CI 覆盖 3.11 / 3.13）；MCP stdio 与 streamable HTTP；DSH、Claude Desktop、Cursor 等 Agent。
 
-## 不支持什么
+## 尚未实现
 
 - **Windows**：依赖 POSIX 进程组和资源限制，当前不可用。
 - **自带大模型或聊天界面**：Print3D 是 MCP server，理解需求、写脚本、看图由 Agent 完成。
 - **托管的云端建模平台**：它是单用户、自托管服务；HTTP 模式不应直接暴露到公网。
-- **保证打印成功**：几何检查和可打印性评分是决策辅助，不是结构仿真或认证。
-- **Bambu LAN / PrusaLink 的真机验证**：适配器已有模拟测试，但尚未在对应硬件上完整验证。
+
+## ⚠️注意
+
+- **不保证打印成功**：几何检查和可打印性评分是决策辅助，不是结构仿真或认证。
+- **Bambu LAN / PrusaLink 的真机验证**：适配器已有模拟测试，但尚未在对应硬件上完整验证,目前完成的验证的硬件:Snapmaker U1。
 - **正式发行版**：项目仍是 Alpha；PyPI 与 GitHub Release 尚未发布，当前以源码安装为主。
 
 ## License
