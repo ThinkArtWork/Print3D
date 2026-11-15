@@ -8,15 +8,16 @@ geometry-check loop.
 
 from __future__ import annotations
 
-import contextlib
 import os
-import signal
+import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import processes
 from .cad import clean_env
 from .errors import InvalidArgument
 from .mesh import stats_for_stl
@@ -24,11 +25,15 @@ from .workspace import atomic_write_text
 
 DEFAULT_TIMEOUT_S = 300.0
 MAX_OUTPUT_CHARS = 6000
+
+#: POSIX install locations, in priority order.  Config always wins.
 BLENDER_CANDIDATES = (
     Path("/Applications/Blender.app/Contents/MacOS/Blender"),
     Path("/usr/local/bin/blender"),
     Path("/opt/homebrew/bin/blender"),
 )
+
+_VERSION_RE = re.compile(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 
 EXPORT_SCRIPT = """\
 import bpy
@@ -55,21 +60,79 @@ print("PRINT3D_BLENDER_EXPORT " + json.dumps({"objects": len(meshes)}))
 """
 
 
+def _version_key(path: Path) -> tuple[int, int, int]:
+    """Sort ``Blender 4.10`` above ``Blender 4.9`` instead of string-wise."""
+
+    match = _VERSION_RE.search(path.name)
+    if match is None:
+        return (0, 0, 0)
+    return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+
+
+def windows_blender_candidates() -> tuple[Path, ...]:
+    """Blender installs on Windows: ``Program Files``, then a per-user copy.
+
+    The vendor installer creates ``Blender Foundation\\Blender <version>\\blender.exe``;
+    ``winget`` and the portable ZIP use the same layout under a different root.
+    Newest version first.
+    """
+
+    roots: list[Path] = []
+    for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        raw = os.environ.get(env_name)
+        if not raw:
+            continue
+        base = Path(raw)
+        if env_name == "LOCALAPPDATA":
+            base = base / "Programs"
+        vendor = base / "Blender Foundation"
+        if not vendor.is_dir():
+            continue
+        versioned = sorted(
+            (child for child in vendor.iterdir() if child.is_dir()),
+            key=_version_key,
+            reverse=True,
+        )
+        roots.extend(child / "blender.exe" for child in versioned)
+        roots.append(vendor / "Blender" / "blender.exe")
+    return tuple(roots)
+
+
+def blender_candidates() -> tuple[Path, ...]:
+    """Every path worth probing on this platform."""
+
+    if processes.IS_WINDOWS:
+        return windows_blender_candidates()
+    return BLENDER_CANDIDATES
+
+
+def _is_executable(path: Path) -> bool:
+    """True for a file we can start; Windows has no execute bit to check."""
+
+    if not path.is_file():
+        return False
+    return processes.IS_WINDOWS or os.access(path, os.X_OK)
+
+
 def find_blender(explicit: str | None = None) -> Path | None:
     """Return the Blender executable to use, or ``None`` when not installed."""
 
     if explicit:
         path = Path(explicit).expanduser()
-        if path.is_file() and os.access(path, os.X_OK):
+        if _is_executable(path):
             return path
+        found = shutil.which(explicit)
+        if found:
+            return Path(found)
         raise InvalidArgument(
             f"Blender not found at {path}",
             hint="Set render.blender_path or pass blender_path= to blender_run.",
         )
-    for candidate in BLENDER_CANDIDATES:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
+    for candidate in blender_candidates():
+        if _is_executable(candidate):
             return candidate
-    return None
+    found = shutil.which("blender")
+    return Path(found) if found else None
 
 
 @dataclass(slots=True)
@@ -101,14 +164,6 @@ class BlenderResult:
         }
 
 
-def _kill(process: subprocess.Popen[str]) -> None:
-    try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        with contextlib.suppress(OSError):
-            process.kill()
-
-
 def run_blender(
     script: str,
     *,
@@ -138,16 +193,22 @@ def run_blender(
     atomic_write_text(export_path, EXPORT_SCRIPT, mode=0o600)
 
     env = clean_env()
+    # Blender reads TMPDIR on POSIX and TEMP/TMP on Windows; give it a scratch
+    # directory inside the workdir on every platform so nothing leaks into the
+    # user's own temp space.
+    scratch = directory / "tmp"
+    scratch.mkdir(exist_ok=True)
     env.update(
         {
             "PRINT3D_BLENDER_OUT": str(directory),
             "BLENDER_USER_CONFIG": str(directory / ".blender-config"),
             "BLENDER_USER_SCRIPTS": str(directory / ".blender-scripts"),
             "BLENDER_USER_DATAFILES": str(directory / ".blender-data"),
-            "TMPDIR": str(directory / "tmp"),
+            "TMPDIR": str(scratch),
+            "TEMP": str(scratch),
+            "TMP": str(scratch),
         }
     )
-    (directory / "tmp").mkdir(exist_ok=True)
 
     extra: list[str] = []
     if image:
@@ -174,37 +235,29 @@ def run_blender(
         command.extend(["--", *extra])
 
     started = time.monotonic()
+    stdout = stderr = ""
+    exit_code: int | None = None
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=directory,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,
-        )
+        with processes.child(command, cwd=directory, env=env) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                processes.terminate_tree(process)
+                stdout, stderr = process.communicate()
+                elapsed = time.monotonic() - started
+                return BlenderResult(
+                    ok=False,
+                    exit_code=None,
+                    duration_s=elapsed,
+                    stdout=(stdout or "")[-max_output_chars:],
+                    stderr=(stderr or "")[-max_output_chars:],
+                    timed_out=True,
+                    error=f"Blender exceeded the {timeout_s:g}s budget",
+                    hint="Reduce subdivision/modifier counts, or raise render.timeout_s.",
+                )
+            exit_code = process.returncode
     except OSError as exc:
         return BlenderResult(ok=False, error=f"Could not start Blender: {exc}")
-
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        _kill(process)
-        stdout, stderr = process.communicate()
-        elapsed = time.monotonic() - started
-        return BlenderResult(
-            ok=False,
-            exit_code=None,
-            duration_s=elapsed,
-            stdout=stdout[-max_output_chars:],
-            stderr=stderr[-max_output_chars:],
-            timed_out=True,
-            error=f"Blender exceeded the {timeout_s:g}s budget",
-            hint="Reduce subdivision/modifier counts, or raise render.timeout_s.",
-        )
 
     elapsed = time.monotonic() - started
     stdout = (stdout or "")[-max_output_chars:]
@@ -212,20 +265,20 @@ def run_blender(
     stl_path = directory / "model.stl"
     glb_path = directory / "model.glb"
 
-    if process.returncode != 0:
+    if exit_code != 0:
         return BlenderResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=elapsed,
             stdout=stdout,
             stderr=stderr,
-            error=f"Blender exited with code {process.returncode}",
+            error=f"Blender exited with code {exit_code}",
             hint="Read stderr_tail; the bpy script raised before exporting.",
         )
     if not stl_path.is_file() or stl_path.stat().st_size <= 84:
         return BlenderResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=elapsed,
             stdout=stdout,
             stderr=stderr,
@@ -241,7 +294,7 @@ def run_blender(
     except (OSError, ValueError) as exc:
         return BlenderResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=elapsed,
             stdout=stdout,
             stderr=stderr,
@@ -251,7 +304,7 @@ def run_blender(
     checks["engine"] = "blender"
     return BlenderResult(
         ok=True,
-        exit_code=process.returncode,
+        exit_code=exit_code,
         duration_s=elapsed,
         stdout=stdout,
         stderr=stderr,

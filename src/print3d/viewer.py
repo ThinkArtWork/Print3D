@@ -27,6 +27,17 @@ VIEWER_FILE = "viewer.html"
 _TEMPLATE = Path(__file__).with_name("viewer_template.html").read_text(encoding="utf-8")
 
 
+def _write_document(target: Path, html: str) -> None:
+    """Write generated HTML as UTF-8 with LF endings.
+
+    A viewer must be byte-identical on every platform: the reported ``bytes`` is
+    ``len(html.encode("utf-8"))``, which counts LF only, while a text-mode write
+    on Windows would turn every LF into CRLF and inflate the file.
+    """
+
+    target.write_text(html, encoding="utf-8", newline="\n")
+
+
 def viewer_alias_name(name: str, asset_id: str = "") -> str:
     """Return a human-readable viewer filename derived from the model name."""
 
@@ -237,7 +248,8 @@ def write_legacy_redirect(directory: str | Path, *, title: str = "") -> Path:
         f'<body><p>查看器已合并到资产目录：<a href="../viewer.html">{label}</a></p>'
         "</body></html>\n"
     )
-    target.write_text(html, encoding="utf-8")
+    _write_document(target, html)
+
     target.chmod(0o644)
     return target
 
@@ -264,7 +276,8 @@ def write_collection_viewer(
     )
     target = Path(directory) / VIEWER_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(html, encoding="utf-8")
+    _write_document(target, html)
+
     target.chmod(0o644)
     alias = link_viewer_alias(target.parent, name=name or title, asset_id="")
     return {
@@ -300,7 +313,8 @@ def write_viewer(
     )
     target = Path(out_path) if out_path else stl_path.with_name(VIEWER_FILE)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(html, encoding="utf-8")
+    _write_document(target, html)
+
     target.chmod(0o644)
     alias = link_viewer_alias(target.parent, name=name or title, asset_id="")
     return {

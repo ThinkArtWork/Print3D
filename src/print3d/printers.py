@@ -96,6 +96,10 @@ class PrinterState:
 
 SLOT_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
+#: Upper bound for the per-printer filament table (single-nozzle AMS machines cap
+#: out well below this; a machine with more heads is not a 3D printer).
+MAX_FILAMENT_SLOTS = 16
+
 
 def normalise_slots(slots: list[dict[str, Any]] | None, *, toolheads: int) -> list[dict[str, Any]]:
     """Validate the per-slot material/colour table for a printer."""
@@ -131,8 +135,8 @@ def normalise_slots(slots: list[dict[str, Any]] | None, *, toolheads: int) -> li
         if toolhead is not None:
             item["toolhead"] = toolhead
         out.append(item)
-    if len(out) > 16:
-        raise InvalidArgument("at most 16 filament slots are supported")
+    if len(out) > MAX_FILAMENT_SLOTS:
+        raise InvalidArgument(f"at most {MAX_FILAMENT_SLOTS} filament slots are supported")
     return out
 
 
@@ -327,6 +331,20 @@ class _HttpPrinter:
             )
         self.run_gcode(script)
 
+    def filament_slots(self) -> dict[str, Any]:
+        """Report the filament loaded in each slot, when the printer publishes it.
+
+        Adapters that cannot ask the firmware raise ``AdapterUnavailable`` so the
+        caller keeps the configured table instead of clearing it.
+        """
+        raise AdapterUnavailable(
+            f"The {self.adapter!r} adapter cannot report loaded filament",
+            hint=(
+                "Keep printers[].slots configured by hand with printer_save; "
+                "Moonraker/Klipper printers can report it."
+            ),
+        )
+
     def cancel(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
@@ -395,6 +413,22 @@ class MoonrakerPrinter(_HttpPrinter):
     def cancel(self) -> None:
         self._request("POST", "/printer/print/cancel")
 
+    def filament_slots(self) -> dict[str, Any]:
+        """Read the loaded filament table from ``print_task_config``."""
+        response = self._request(
+            "GET",
+            "/printer/objects/query",
+            params={"print_task_config": ""},
+        )
+        payload = self._json(response)
+        config = ((payload.get("result") or {}).get("status") or {}).get("print_task_config") or {}
+        if not isinstance(config, dict):
+            raise AdapterUnavailable(
+                "The printer returned no print_task_config object",
+                hint="Set printers[].slots by hand with printer_save.",
+            )
+        return slots_from_task_config(config)
+
 
 class OctoPrintPrinter(_HttpPrinter):
     """OctoPrint's documented REST API (X-Api-Key)."""
@@ -458,6 +492,136 @@ class OctoPrintPrinter(_HttpPrinter):
 
     def cancel(self) -> None:
         self._request("POST", "/api/job", json={"command": "cancel"})
+
+
+def slot_differences(
+    configured: list[dict[str, Any]],
+    reported: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compare the configured slot table with what the printer reports.
+
+    Only ``material``, ``color`` and ``name`` take part: a configured slot may
+    leave ``name`` out, and an empty ``{toolhead: n}`` means "no spool", which the
+    probe also reports for an empty head.
+    """
+
+    changes: list[dict[str, Any]] = []
+    for index in range(max(len(configured), len(reported))):
+        current = configured[index] if index < len(configured) else {}
+        fresh = reported[index] if index < len(reported) else {}
+        if not isinstance(current, dict) or not isinstance(fresh, dict):
+            continue
+        for name in ("material", "color", "name"):
+            had = str(current.get(name) or "").strip().upper()
+            now = str(fresh.get(name) or "").strip().upper()
+            if had != now:
+                changes.append(
+                    {
+                        "toolhead": index,
+                        "field": name,
+                        "configured": current.get(name) or None,
+                        "printer": fresh.get(name) or None,
+                    }
+                )
+    return changes
+
+
+def _task_list(config: dict[str, Any], key: str) -> list[Any]:
+    value = config.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _task_text(config: dict[str, Any], key: str, index: int, *, limit: int = 48) -> str | None:
+    """One printable string from a ``print_task_config`` array.
+
+    Whitespace is collapsed and the length capped: the value comes from the
+    printer and ends up in ``config.json`` and in tool output, so it must not be
+    able to carry control characters or an unbounded blob.
+    """
+
+    values = _task_list(config, key)
+    if index >= len(values):
+        return None
+    text = " ".join(str(values[index] or "").split())[:limit].strip()
+    if not text or text.upper() == "NONE":
+        return None
+    return text
+
+
+def _task_colour(config: dict[str, Any], index: int) -> str | None:
+    """Snapshot colour for one toolhead as ``#RRGGBB``.
+
+    ``filament_color_rgba`` carries an alpha suffix and is preferred; the older
+    ``filament_color`` is a packed ARGB integer.
+    """
+
+    rgba = _task_list(config, "filament_color_rgba")
+    if index < len(rgba):
+        text = str(rgba[index] or "").strip().lstrip("#").upper()
+        if len(text) == 8:  # RRGGBBAA, alpha last
+            text = text[:6]
+        if SLOT_COLOR_RE.match(f"#{text}"):
+            return f"#{text}"
+    packed = _task_list(config, "filament_color")
+    if index < len(packed) and isinstance(packed[index], int) and packed[index] >= 0:
+        return f"#{packed[index] & 0xFFFFFF:06X}"
+    return None
+
+
+def slots_from_task_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Turn a Moonraker ``print_task_config`` blob into Print3D slots.
+
+    Snapmaker and other Klipper printers publish one entry per toolhead: vendor,
+    filament type/sub-type, colour and whether a spool is actually loaded.  The
+    result is directly usable as ``printers[].slots`` in ``printer_save``, and it
+    keeps every toolhead position so ``{toolhead: n}`` stays aligned with Tn.
+    """
+
+    types = _task_list(config, "filament_type")
+    exists = _task_list(config, "filament_exist")
+    vendors = _task_list(config, "filament_vendor")
+    reported = max(len(types), len(vendors), len(exists))
+    count = min(reported, MAX_FILAMENT_SLOTS)
+    slots: list[dict[str, Any]] = []
+    loaded: list[bool] = []
+    warnings: list[str] = []
+    if reported > MAX_FILAMENT_SLOTS:
+        warnings.append(
+            f"the printer reported {reported} slots; only the first "
+            f"{MAX_FILAMENT_SLOTS} are kept"
+        )
+    for index in range(count):
+        material = _task_text(config, "filament_type", index)
+        present = bool(exists[index]) if index < len(exists) else bool(material)
+        entry: dict[str, Any] = {"toolhead": index}
+        if present and material:
+            entry["material"] = material.upper()
+            colour = _task_colour(config, index)
+            if colour:
+                entry["color"] = colour
+            label = " ".join(
+                part
+                for part in (
+                    _task_text(config, "filament_vendor", index),
+                    material,
+                    _task_text(config, "filament_sub_type", index),
+                )
+                if part
+            )
+            if label:
+                entry["name"] = label
+        elif present:
+            warnings.append(f"T{index} reports filament without a type; kept the toolhead slot empty")
+        else:
+            warnings.append(f"T{index} has no filament loaded")
+        slots.append(entry)
+        loaded.append(bool(present))
+    if not slots:
+        raise AdapterUnavailable(
+            "The printer reported no filament table",
+            hint="Set printers[].slots by hand with printer_save.",
+        )
+    return {"source": "print_task_config", "slots": slots, "loaded": loaded, "warnings": warnings}
 
 
 def _render_template(template: str, values: dict[str, str], *, label: str) -> str:

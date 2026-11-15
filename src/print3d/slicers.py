@@ -7,19 +7,18 @@ command line, the profile handling and the G-code inspection.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import processes
 from .cad import clean_env
 from .config import TargetSettings
 from .errors import AdapterUnavailable, ConfigError, InvalidArgument, NotFound
@@ -35,7 +34,7 @@ MAX_OUTPUT_CHARS = 6000
 SLICE_ID_RE = re.compile(r"^s_[A-Za-z0-9_]{6,64}$")
 STATISTICS_RE = re.compile(r".*\.statistics\.json$")
 
-#: Common install locations, in priority order.  Config always wins.
+#: POSIX install locations, in priority order.  Config always wins.
 SLICER_CANDIDATES = (
     "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
     "~/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
@@ -43,6 +42,18 @@ SLICER_CANDIDATES = (
     "~/Applications/Snapmaker Orca.app/Contents/MacOS/Snapmaker_Orca",
     "/usr/local/bin/orca-slicer",
     "/opt/homebrew/bin/orca-slicer",
+)
+
+#: Executable names searched on ``PATH``; Windows needs the ``.exe`` suffix for
+#: ``shutil.which`` to match, so both spellings are listed.
+SLICER_PROGRAM_NAMES = (
+    "orca-slicer",
+    "orca-slicer.exe",
+    "OrcaSlicer",
+    "OrcaSlicer.exe",
+    "snapmaker-orca",
+    "snapmaker-orca.exe",
+    "Snapmaker_Orca.exe",
 )
 
 #: Registered backend names (``slicer/<name>``): each drives an
@@ -84,6 +95,10 @@ _TOOL_MACRO_RE = re.compile(
     r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s+.*?\bEXTRUDER\s*=\s*(\d+)\b", re.IGNORECASE
 )
 _TOTAL_TIME_RE = re.compile(r"total estimated time:\s*([^;\n]+)", re.IGNORECASE)
+#: OrcaSlicer 2.5 and newer write ``; estimated printing time (normal mode) = 8m 44s``.
+_ESTIMATED_TIME_RE = re.compile(
+    r"^;\s*estimated printing time \([^)]*\)\s*=\s*(.+)$", re.MULTILINE
+)
 _MODEL_TIME_RE = re.compile(r"model printing time:\s*([^;\n]+)", re.IGNORECASE)
 _PRINTABLE_RE = re.compile(r"^;\s*printable_area\s*=\s*(.+)$", re.MULTILINE)
 _VERSION_RE = re.compile(r"(OrcaSlicer|Snapmaker[_ ]Orca|BambuStudio)[-_ ]?v?(\d+(?:\.\d+)+)")
@@ -433,6 +448,41 @@ def validate_slice_id(value: str) -> str:
     return text
 
 
+def windows_slicer_candidates() -> tuple[Path, ...]:
+    """OrcaSlicer / Snapmaker Orca installs on Windows, most likely first.
+
+    The vendor installers put the GUI binary in ``%PROGRAMFILES%`` (machine) or
+    ``%LOCALAPPDATA%\\Programs`` (per-user); both ship a CLI-capable executable,
+    which is all ``slice_stl`` needs.
+    """
+
+    roots: list[Path] = []
+    for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        raw = os.environ.get(env_name)
+        if not raw:
+            continue
+        base = Path(raw)
+        if env_name == "LOCALAPPDATA":
+            base = base / "Programs"
+        for folder, exe in (
+            ("OrcaSlicer", "orca-slicer.exe"),
+            ("OrcaSlicer", "OrcaSlicer.exe"),
+            ("Snapmaker Orca", "Snapmaker_Orca.exe"),
+            ("Snapmaker_Orca", "Snapmaker_Orca.exe"),
+            ("OrcaSlicer", os.path.join("bin", "orca-slicer.exe")),
+        ):
+            roots.append(base / folder / exe)
+    return tuple(roots)
+
+
+def slicer_candidates() -> tuple[Path, ...]:
+    """Every install path worth probing on this platform."""
+
+    if processes.IS_WINDOWS:
+        return windows_slicer_candidates()
+    return tuple(Path(item).expanduser() for item in SLICER_CANDIDATES)
+
+
 def find_slicer(explicit: str | None = None) -> Path | None:
     """Locate the slicer binary: explicit config first, then known paths."""
     if explicit:
@@ -444,16 +494,29 @@ def find_slicer(explicit: str | None = None) -> Path | None:
             )
         return path
 
-    for candidate in SLICER_CANDIDATES:
-        path = Path(candidate).expanduser()
+    for path in slicer_candidates():
         if path.is_file():
             return path
 
-    for name in ("orca-slicer", "OrcaSlicer", "snapmaker-orca"):
+    for name in SLICER_PROGRAM_NAMES:
         found = shutil.which(name)
         if found:
             return Path(found)
     return None
+
+
+def install_hint() -> str:
+    """Where to get a slicer, worded for this platform."""
+
+    if processes.IS_WINDOWS:
+        return (
+            "Install OrcaSlicer, or set targets.<name>.slicer_path to "
+            '"C:\\\\Program Files\\\\OrcaSlicer\\\\orca-slicer.exe".'
+        )
+    return (
+        "Install OrcaSlicer into /Applications, or set "
+        "targets.<name>.slicer_path to the binary."
+    )
 
 
 @dataclass(slots=True)
@@ -463,7 +526,10 @@ class SlicerInfo:
     version: str | None = None
     supports_statistics: bool = False
     supports_datadir: bool = False
+    #: ``False`` when ``--help`` printed nothing, so the flag list is unverified.
+    help_text_verified: bool = True
     problems: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -472,12 +538,20 @@ class SlicerInfo:
             "version": self.version,
             "supports_statistics": self.supports_statistics,
             "supports_datadir": self.supports_datadir,
+            "help_text_verified": self.help_text_verified,
             "problems": list(self.problems),
+            "warnings": list(self.warnings),
         }
 
 
 def probe_slicer(path: Path | str | None) -> SlicerInfo:
-    """Run ``--help`` and learn the version and supported flags."""
+    """Run ``--help`` and learn the version and supported flags.
+
+    Silence is not failure.  OrcaSlicer on Windows can exit successfully without
+    printing any help text; treating that as "not usable" would disable slicing on
+    a working install, so the adapter records that the flags were unverified and
+    leaves the final verdict to a real slice.
+    """
     if path is None:
         return SlicerInfo(found=False, problems=["no slicer binary found"])
 
@@ -486,18 +560,25 @@ def probe_slicer(path: Path | str | None) -> SlicerInfo:
         return SlicerInfo(found=False, path=str(binary), problems=["binary does not exist"])
 
     try:
-        proc = subprocess.run(
+        proc = processes.run_capture(
             [str(binary), "--help"],
-            capture_output=True,
-            text=True,
             timeout=30,
             env=clean_env(),
-            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return SlicerInfo(found=False, path=str(binary), problems=[f"--help failed: {exc}"])
 
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if not text.strip():
+        return SlicerInfo(
+            found=True,
+            path=str(binary),
+            help_text_verified=False,
+            warnings=[
+                "--help produced no output, so the CLI flags could not be verified; "
+                "run one real slice to confirm the adapter works."
+            ],
+        )
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     version = None
     for line in lines:
@@ -701,6 +782,31 @@ def _prepare_standalone(
     )
 
 
+#: Preset JSON is what matters here.  Cover images and bed meshes are GUI assets:
+#: skipping them keeps the private copy small without changing preset resolution.
+_PROFILE_ASSET_SUFFIXES = (".stl", ".png", ".svg", ".3mf", ".gif", ".jpg", ".webp")
+
+
+def _copy_profile_tree(source: Path, destination: Path) -> None:
+    """Copy a ``system`` profile tree, skipping the GUI assets.
+
+    OrcaSlicer resolves ``inherits`` **across** vendor trees: a Snapmaker
+    filament can inherit from the shared ``OrcaFilamentLibrary``, and one preset
+    that cannot be resolved makes the whole bundle fail to load.  A private
+    datadir therefore has to carry every vendor, not only the one being sliced.
+
+    Symlinks are copied by content rather than recreated: creating a link on
+    Windows needs Developer Mode, and a preset tree is small enough that the
+    difference does not matter.  Dangling links are skipped rather than fatal.
+    """
+
+    def _ignore(directory: str, names: list[str]) -> set[str]:
+        return {name for name in names if Path(name).suffix.lower() in _PROFILE_ASSET_SUFFIXES}
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination, ignore=_ignore, ignore_dangling_symlinks=True)
+
+
 def prepare_profiles(
     target: TargetSettings,
     workdir: Path,
@@ -737,7 +843,7 @@ def prepare_profiles(
         )
 
     try:
-        vendor_dir, bundle = _vendor_root(machine)
+        vendor_dir, _bundle = _vendor_root(machine)
     except ConfigError:
         return _prepare_standalone(
             machine=machine,
@@ -753,12 +859,11 @@ def prepare_profiles(
         )
     source_root = datadir or vendor_dir.parent.parent
     copy_root = workdir / "datadir"
-    vendor_copy = copy_root / "system" / vendor_dir.name
-    if not vendor_copy.exists():
-        vendor_copy.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(vendor_dir, vendor_copy)
-        shutil.copyfile(bundle, copy_root / "system" / bundle.name)
+    system_copy = copy_root / "system"
+    if not system_copy.exists():
+        _copy_profile_tree(vendor_dir.parent, system_copy)
 
+    vendor_copy = system_copy / vendor_dir.name
     machine_copy = vendor_copy / "machine" / machine.name
     process_copy = vendor_copy / "process" / process.name
     filament_copy = [vendor_copy / "filament" / item.name for item in filaments]
@@ -800,13 +905,40 @@ def _duration_seconds(text: str) -> int | None:
     return hours * 3600 + minutes * 60 + seconds
 
 
+#: OrcaSlicer splits its metadata across two blocks: the header block (layer
+#: count, generated-by) is at the top, while ``filament used``, ``printer_model``
+#: and ``estimated printing time`` sit in a footer whose offset depends on the
+#: model.  A head-only window silently loses them on anything but a tiny part, so
+#: both ends are read and searched in order.
+_HEAD_BYTES = 300_000
+_TAIL_BYTES = 300_000
+
+
+def _gcode_windows(data: bytes) -> tuple[str, ...]:
+    """Decode the head of the file and, when there is more, its tail."""
+
+    head = data[:_HEAD_BYTES].decode("utf-8", errors="ignore")
+    if len(data) <= _HEAD_BYTES:
+        return (head,)
+    tail = data[-_TAIL_BYTES:].decode("utf-8", errors="ignore")
+    newline = tail.find("\n")  # drop the partial line the window started in
+    return (head, tail[newline + 1 :] if newline >= 0 else tail)
+
+
 def parse_gcode(path: Path) -> dict[str, Any]:
-    """Read the metadata OrcaSlicer writes into the G-code header."""
+    """Read the metadata OrcaSlicer writes around the G-code."""
     data = path.read_bytes()
-    text = data[:300_000].decode("utf-8", errors="ignore")
+    windows = _gcode_windows(data)
+
+    def _first(regex: re.Pattern[str]) -> re.Match[str] | None:
+        for window in windows:
+            match = regex.search(window)
+            if match:
+                return match
+        return None
 
     def _number(regex: re.Pattern[str]) -> float | None:
-        match = regex.search(text)
+        match = _first(regex)
         if not match:
             return None
         try:
@@ -821,13 +953,13 @@ def parse_gcode(path: Path) -> dict[str, Any]:
             if (match := _TOOL_RE.match(line.strip()))
         }
     )
-    printer = _PRINTER_RE.search(text)
-    generated = _GENERATED_RE.search(text)
-    layers = _LAYER_RE.search(text)
-    total_time = _TOTAL_TIME_RE.search(text)
-    model_time = _MODEL_TIME_RE.search(text)
-    flavor = _FLAVOR_RE.search(text)
-    printable = _PRINTABLE_RE.search(text)
+    printer = _first(_PRINTER_RE)
+    generated = _first(_GENERATED_RE)
+    layers = _first(_LAYER_RE)
+    total_time = _first(_ESTIMATED_TIME_RE) or _first(_TOTAL_TIME_RE)
+    model_time = _first(_MODEL_TIME_RE)
+    flavor = _first(_FLAVOR_RE)
+    printable = _first(_PRINTABLE_RE)
     bed_mm = None
     if printable:
         points: list[tuple[float, float]] = []
@@ -990,11 +1122,6 @@ class SliceResult:
         }
 
 
-def _terminate(process: subprocess.Popen[str]) -> None:
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-
-
 def build_command(
     binary: Path,
     prepared: PreparedProfiles,
@@ -1039,13 +1166,7 @@ def slice_stl(
 
     binary = find_slicer(slicer_path or target.slicer_path)
     if binary is None:
-        raise AdapterUnavailable(
-            "No slicer found",
-            hint=(
-                "Install OrcaSlicer into /Applications, or set "
-                "targets.<name>.slicer_path to the binary."
-            ),
-        )
+        raise AdapterUnavailable("No slicer found", hint=install_hint())
     info = probe_slicer(binary)
     if not info.found:
         raise AdapterUnavailable(
@@ -1073,26 +1194,19 @@ def slice_stl(
 
     started = time.monotonic()
     timed_out = False
+    stdout = stderr = ""
+    exit_code: int | None = None
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=str(outdir),
-            env=clean_env(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
+        with processes.child(command, cwd=str(outdir), env=clean_env()) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=budget)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                processes.terminate_tree(process)
+                stdout, stderr = process.communicate()
+            exit_code = process.returncode
     except OSError as exc:
         raise AdapterUnavailable(f"Could not start the slicer: {exc}") from exc
-
-    try:
-        stdout, stderr = process.communicate(timeout=budget)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _terminate(process)
-        stdout, stderr = process.communicate()
     elapsed = time.monotonic() - started
 
     gcodes = sorted(outdir.glob("*.gcode"), key=lambda item: item.stat().st_mtime)
@@ -1109,7 +1223,7 @@ def slice_stl(
 
     result = SliceResult(
         ok=False,
-        exit_code=process.returncode,
+        exit_code=exit_code,
         duration_s=elapsed,
         stdout=stdout,
         stderr=stderr,
@@ -1124,7 +1238,10 @@ def slice_stl(
         result.hint = "Raise targets.<name>.timeout_s or simplify the model."
         return result
     if not gcodes:
-        result.error = f"slicer exited with code {process.returncode} and produced no G-code"
+        # The probe could not read --help on this platform, so its note about
+        # unverified flags belongs with the failure, not on every good slice.
+        result.warnings.extend(info.warnings)
+        result.error = f"slicer exited with code {exit_code} and produced no G-code"
         result.hint = (stderr or stdout)[-1200:].strip() or "Run slice_plan to check the profiles."
         return result
 

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import processes
 from .cad import clean_env, kill_group, read_result, tail
 from .errors import InvalidArgument, NotFound
 
@@ -160,18 +161,16 @@ def run_drawing(
     started = time.monotonic()
     timed_out = False
     stdout = stderr = ""
+    exit_code: int | None = None
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=str(outdir),
-            env=clean_env(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,
-        )
+        with processes.child(command, cwd=str(outdir), env=clean_env()) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                kill_group(process)
+                stdout, stderr = process.communicate()
+            exit_code = process.returncode
     except OSError as exc:
         return DrawingResult(
             ok=False,
@@ -179,13 +178,6 @@ def run_drawing(
             hint="Set config.cad.python to a Python with build123d installed.",
             duration_s=time.monotonic() - started,
         )
-
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        kill_group(process)
-        stdout, stderr = process.communicate()
     duration = time.monotonic() - started
 
     stdout = tail(stdout or "", max_output_chars)
@@ -195,7 +187,7 @@ def run_drawing(
     if timed_out:
         return DrawingResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=duration,
             stdout=stdout,
             stderr=stderr,
@@ -210,13 +202,13 @@ def run_drawing(
     if payload is None:
         return DrawingResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=duration,
             stdout=stdout,
             stderr=stderr,
             error=(
                 "the drawing interpreter exited without a result "
-                f"(code {process.returncode}); is build123d installed?"
+                f"(code {exit_code}); is build123d installed?"
             ),
             hint=(
                 "Install build123d into the CAD interpreter, or set config.cad.python "
@@ -226,7 +218,7 @@ def run_drawing(
 
     return DrawingResult(
         ok=bool(payload.get("ok")),
-        exit_code=process.returncode,
+        exit_code=exit_code,
         duration_s=duration,
         stdout=stdout,
         stderr=stderr,

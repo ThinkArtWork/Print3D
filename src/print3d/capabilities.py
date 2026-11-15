@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, processes
 from .config import LoadedConfig, Secrets
 from .jobs import JobStore
 from .registry import Registry
@@ -143,13 +143,10 @@ def _build123d_version(python: str | None) -> tuple[str | None, str]:
     try:
         from .cad import clean_env
 
-        completed = subprocess.run(
+        completed = processes.run_capture(
             [python, "-I", "-c", _BUILD123D_PROBE],
-            capture_output=True,
-            text=True,
             timeout=30,
             env=clean_env(),
-            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None, f"cad.python={python}"
@@ -295,6 +292,7 @@ def build_capabilities(
         "slicers": slicers,
         "printers": printers,
         "adapters": registry.snapshot(),
+        "sandbox": processes.describe_limits(),
         "summary": {
             "cloud_providers_usable": len(providers["usable"]),
             "cloud_providers_ready": sum(1 for item in providers["cloud"] if item["ready"]),
@@ -335,5 +333,6 @@ def build_system_status(
         },
         "jobs": counts,
         "adapters": registry.snapshot(),
+        "sandbox": processes.describe_limits(),
         "warnings": loaded.warnings,
     }

@@ -24,6 +24,7 @@ from ..printers import (
     build_printer,
     normalise_flow_calibration,
     normalise_slots,
+    slot_differences,
     validate_http_config,
     validate_printer_id,
 )
@@ -85,6 +86,54 @@ def register(server: FastMCP, rt: Runtime) -> None:
                 "hint": (
                     "Call printer_status(id) to test a connection, or printer_save to "
                     "add or update one."
+                ),
+            }
+        except Print3DError as exc:
+            return tool_error(exc)
+
+    @server.tool(
+        name="printer_probe_slots",
+        description=(
+            "Ask the printer which filament is loaded in each toolhead/slot (vendor, "
+            "material, colour, whether a spool is present) and return it in the exact "
+            "shape printers[].slots expects, plus the printer_save arguments to apply it. "
+            "Read-only: nothing is written to config.json. Moonraker/Klipper printers "
+            "report this; other adapters raise an adapter_unavailable error."
+        ),
+    )
+    def printer_probe_slots(printer_id: str) -> dict[str, Any]:
+        try:
+            validate_printer_id(printer_id)
+            entry = _printer_entry(rt, printer_id)
+            adapter = build_printer(entry, secrets=rt.secrets)
+            report = adapter.filament_slots()
+            slots = list(report.get("slots") or [])
+            arguments: dict[str, Any] = {
+                "printer_id": entry.id,
+                "confirm": f"SAVE PRINTER {entry.id}",
+                "adapter": entry.adapter,
+                "base_url": entry.base_url or "",
+                "model": entry.model or "",
+                "toolheads": entry.toolheads,
+                "slots": slots,
+            }
+            differences = slot_differences(entry.slots or [], slots)
+            return {
+                "ok": True,
+                "writes_performed": False,
+                "printer_id": entry.id,
+                "source": report.get("source"),
+                "toolheads": entry.toolheads,
+                "slots": slots,
+                "loaded": list(report.get("loaded") or []),
+                "changed": bool(differences),
+                "differences": differences,
+                "warnings": list(report.get("warnings") or []),
+                "suggested_arguments": arguments,
+                "hint": (
+                    "Call printer_save with suggested_arguments to store this table."
+                    if differences
+                    else "config.json already matches the printer; nothing to update."
                 ),
             }
         except Print3DError as exc:

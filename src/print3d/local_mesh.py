@@ -16,16 +16,14 @@ private service wrapper — becomes a provider without changing Print3D.
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
-import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import processes
 from .cad import clean_env
 from .errors import ConfigError, InvalidArgument, NotFound
 
@@ -63,12 +61,15 @@ class LocalRunResult:
 
 def _as_argv(value: Any, *, field_name: str) -> list[str]:
     if isinstance(value, str):
-        return shlex.split(value)
+        return processes.split_command_text(value)
     if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
         return list(value)
     raise ConfigError(
         f"providers.local.{field_name} must be a string or a list of strings",
-        hint='Example: "command": ["/opt/triposr/.venv/bin/python", "run.py"]',
+        hint=(
+            'Example: "command": ["C:\\\\Tools\\\\triposr\\\\.venv\\\\Scripts\\\\python.exe", "run.py"]'
+            ' — an argv list avoids quoting rules entirely.'
+        ),
     )
 
 
@@ -198,18 +199,30 @@ def run_local(
     env["PRINT3D_LOCAL_PROVIDER"] = provider_id
 
     started = time.monotonic()
+    stdout = stderr = ""
+    exit_code: int | None = None
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=directory,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,
-        )
+        with processes.child(command, cwd=directory, env=env) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                processes.terminate_tree(process)
+                stdout, stderr = process.communicate()
+                return LocalRunResult(
+                    ok=False,
+                    exit_code=None,
+                    duration_s=time.monotonic() - started,
+                    stdout=(stdout or "")[-MAX_OUTPUT_CHARS:],
+                    stderr=(stderr or "")[-MAX_OUTPUT_CHARS:],
+                    timed_out=True,
+                    command=command,
+                    error=f"Local provider {provider_id!r} exceeded the {timeout_s:g}s budget",
+                    hint=(
+                        "Raise providers.local.<id>.timeout_s or use a smaller "
+                        "model/step count."
+                    ),
+                )
+            exit_code = process.returncode
     except OSError as exc:
         return LocalRunResult(
             ok=False,
@@ -218,39 +231,18 @@ def run_local(
             hint="Check providers.local.<id>.command and that the file is executable.",
         )
 
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            process.kill()
-        stdout, stderr = process.communicate()
-        elapsed = time.monotonic() - started
-        return LocalRunResult(
-            ok=False,
-            exit_code=None,
-            duration_s=elapsed,
-            stdout=(stdout or "")[-MAX_OUTPUT_CHARS:],
-            stderr=(stderr or "")[-MAX_OUTPUT_CHARS:],
-            timed_out=True,
-            command=command,
-            error=f"Local provider {provider_id!r} exceeded the {timeout_s:g}s budget",
-            hint="Raise providers.local.<id>.timeout_s or use a smaller model/step count.",
-        )
-
     elapsed = time.monotonic() - started
     stdout = (stdout or "")[-MAX_OUTPUT_CHARS:]
     stderr = (stderr or "")[-MAX_OUTPUT_CHARS:]
-    if process.returncode != 0:
+    if exit_code != 0:
         return LocalRunResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=elapsed,
             stdout=stdout,
             stderr=stderr,
             command=command,
-            error=f"Local provider {provider_id!r} exited with code {process.returncode}",
+            error=f"Local provider {provider_id!r} exited with code {exit_code}",
             hint="Read stderr_tail; fix the provider command or its environment.",
         )
 
@@ -258,7 +250,7 @@ def run_local(
     if not mesh:
         return LocalRunResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=elapsed,
             stdout=stdout,
             stderr=stderr,
@@ -269,7 +261,7 @@ def run_local(
 
     return LocalRunResult(
         ok=True,
-        exit_code=process.returncode,
+        exit_code=exit_code,
         duration_s=elapsed,
         stdout=stdout,
         stderr=stderr,

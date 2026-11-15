@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import resource
 import sys
 import traceback
 from pathlib import Path
@@ -45,8 +44,17 @@ FILES = ("drawing.svg", "drawing.dxf")
 
 
 def _apply_limits(cpu_seconds: int) -> None:
-    """Cap the damage a pathological shape can do (mirrors cad_worker)."""
+    """Cap the damage a pathological shape can do (mirrors cad_worker).
 
+    Windows has no ``resource`` module, so this is a no-op there: the parent's
+    wall-clock timeout and the job-object kill are the only bounds, which is
+    exactly what ``capabilities`` reports.
+    """
+
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - Windows
+        return
     for limit, value in (
         (resource.RLIMIT_CPU, cpu_seconds),
         (resource.RLIMIT_CORE, 0),
@@ -55,6 +63,21 @@ def _apply_limits(cpu_seconds: int) -> None:
     ):
         with contextlib.suppress(ValueError, OSError):
             resource.setrlimit(limit, (value, value))
+
+
+def _force_utf8_stdio() -> None:
+    """Decode our own output as UTF-8 whatever the console code page says.
+
+    The worker runs with ``-I``, which makes the interpreter ignore
+    ``PYTHONIOENCODING``; the parent decodes the pipe as UTF-8, so the child has
+    to agree or a non-ASCII path in a progress line becomes mojibake.
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(OSError, ValueError):
+                reconfigure(encoding="utf-8", errors="replace")
 
 
 def _layout(sizes: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
@@ -262,6 +285,7 @@ def _run(
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(description="Render a STEP file as an SVG/DXF sheet.")
     parser.add_argument("step")
     parser.add_argument("outdir")

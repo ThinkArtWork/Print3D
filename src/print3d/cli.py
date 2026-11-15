@@ -325,7 +325,7 @@ def cmd_view(args: argparse.Namespace) -> int:
         selected=target,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(html, encoding="utf-8")
+    path.write_text(html, encoding="utf-8", newline="\n")
     path.chmod(0o644)
     for entry in entries:
         legacy_dir = assets.revision_dir(args.asset_id, entry["revision"])

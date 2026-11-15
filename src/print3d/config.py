@@ -393,11 +393,15 @@ class Secrets:
         warnings: list[str] = []
         if not path.exists():
             return cls({}, path=path, warnings=warnings)
-        mode = stat.S_IMODE(path.stat().st_mode)
-        if mode & 0o077:
-            warnings.append(
-                f"secrets.json is accessible by other users (mode {mode:o}); chmod 600."
-            )
+        if os.name == "posix":
+            # Unix mode bits are the only cheap check; on Windows st_mode is a
+            # fiction (every file looks 0o666) and the real protection is the
+            # ACL, so warning there would be a false alarm on every install.
+            mode = stat.S_IMODE(path.stat().st_mode)
+            if mode & 0o077:
+                warnings.append(
+                    f"secrets.json is accessible by other users (mode {mode:o}); chmod 600."
+                )
         data = _read_json(path)
         if not isinstance(data, dict):
             raise ConfigError(

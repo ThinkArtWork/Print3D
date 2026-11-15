@@ -175,11 +175,15 @@ def _run(script: Path, outdir: Path, input_step: Path | None = None) -> dict[str
 
 
 def _apply_limits(cpu_seconds: int) -> None:
-    """Bound CPU time, file size and descriptors before importing user code."""
+    """Bound CPU time, file size and descriptors before importing user code.
+
+    Windows has no ``resource`` module; there the parent's wall-clock timeout and
+    the job-object kill are the only bounds, which is what ``capabilities`` says.
+    """
 
     try:
         import resource
-    except ImportError:  # pragma: no cover - non-POSIX
+    except ImportError:  # pragma: no cover - Windows
         return
     for name, value in (
         ("RLIMIT_CPU", (cpu_seconds, cpu_seconds + 5)),
@@ -194,7 +198,22 @@ def _apply_limits(cpu_seconds: int) -> None:
             resource.setrlimit(limit, value)
 
 
+def _force_utf8_stdio() -> None:
+    """Decode our own output as UTF-8 whatever the console code page says.
+
+    ``-I`` makes the interpreter ignore ``PYTHONIOENCODING``; the parent decodes
+    the pipe as UTF-8, so the child has to agree.
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(OSError, ValueError):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(prog="print3d-cad-worker")
     parser.add_argument("script")
     parser.add_argument("outdir")

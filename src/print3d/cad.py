@@ -8,10 +8,8 @@ size cap, and only the JSON it produced is read back.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -19,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import processes
 from .errors import InvalidArgument, NotFound
 
 WORKER = Path(__file__).with_name("cad_worker.py")
@@ -42,10 +41,24 @@ _ENV_ALLOWLIST = (
     "USER",
     "LOGNAME",
     "SHELL",
+    # Windows: the loader and every Win32 shell API need these; USERPROFILE is
+    # what Path.expanduser("~") reads when HOME is unset.
     "SYSTEMROOT",
+    "SYSTEMDRIVE",
     "WINDIR",
     "COMSPEC",
     "PATHEXT",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
     # dynamic loaders: some installs (conda, Homebrew) need these to find OCP
     "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH",
@@ -131,6 +144,11 @@ def clean_env(extra_deny: tuple[str, ...] = ()) -> dict[str, str]:
         {
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONNOUSERSITE": "1",
+            # We decode every pipe as UTF-8 (see print3d.processes.child), so the
+            # child is told to write UTF-8: on Windows a pipe defaults to the ANSI
+            # code page, which would arrive here as replacement characters.
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
             "MPLBACKEND": "Agg",
             "PRINT3D_SANDBOX": "1",
         }
@@ -139,8 +157,8 @@ def clean_env(extra_deny: tuple[str, ...] = ()) -> dict[str, str]:
 
 
 def kill_group(process: subprocess.Popen[str]) -> None:
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    """Kill the child and everything it started (POSIX session, Windows job)."""
+    processes.terminate_tree(process)
 
 
 def read_result(path: Path) -> dict[str, Any] | None:
@@ -206,18 +224,16 @@ def run_script(
     started = time.monotonic()
     timed_out = False
     stdout = stderr = ""
+    exit_code: int | None = None
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=str(outdir),
-            env=clean_env(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,
-        )
+        with processes.child(command, cwd=str(outdir), env=clean_env()) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                kill_group(process)
+                stdout, stderr = process.communicate()
+            exit_code = process.returncode
     except OSError as exc:
         return RunResult(
             ok=False,
@@ -225,13 +241,6 @@ def run_script(
             hint="Set config.cad.python to a Python with build123d installed.",
             duration_s=time.monotonic() - started,
         )
-
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        kill_group(process)
-        stdout, stderr = process.communicate()
     duration = time.monotonic() - started
 
     stdout = tail(stdout or "", max_output_chars)
@@ -241,7 +250,7 @@ def run_script(
     if timed_out:
         return RunResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=duration,
             stdout=stdout,
             stderr=stderr,
@@ -256,13 +265,13 @@ def run_script(
     if payload is None:
         return RunResult(
             ok=False,
-            exit_code=process.returncode,
+            exit_code=exit_code,
             duration_s=duration,
             stdout=stdout,
             stderr=stderr,
             error=(
                 "the CAD interpreter exited without a result "
-                f"(code {process.returncode}); is build123d installed?"
+                f"(code {exit_code}); is build123d installed?"
             ),
             hint=(
                 "Install build123d into the CAD interpreter, or set config.cad.python "
@@ -272,7 +281,7 @@ def run_script(
 
     return RunResult(
         ok=bool(payload.get("ok")),
-        exit_code=process.returncode,
+        exit_code=exit_code,
         duration_s=duration,
         stdout=stdout,
         stderr=stderr,
