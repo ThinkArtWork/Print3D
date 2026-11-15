@@ -187,7 +187,7 @@ The `model_build` result includes `watertight`, `bbox_mm`, `volume_mm3`, `solids
 
 ## Slicing and printing
 
-Slicing and printing are optional. Configure `targets` (OrcaSlicer profiles) and `printers` first. See the [Manual](docs/MANUAL.md) for details.
+Slicing and printing are optional. Configure `targets` (OrcaSlicer profiles) and `printers` first. See the [Manual](docs/MANUAL.en.md) for details.
 
 Tool calls at a glance:
 
