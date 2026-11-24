@@ -546,6 +546,7 @@ orientation_plan(asset_id, target="u1", limit=3)
 
 `printability_check` 给出：
 
+- 水密性：`watertight`、`boundary_edges`、`nonmanifold_edges`、`degenerate_triangles`；不水密会报 `not_watertight` error 并扣分；
 - 包围盒 / 体积；
 - >45° 悬垂面积与占比；
 - 支撑体积估计；

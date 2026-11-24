@@ -30,9 +30,10 @@ def register(server: FastMCP, rt: Runtime) -> None:
     @server.tool(
         name="printability_check",
         description=(
-            "Read-only geometric printability report for a built revision: overhang "
-            "area, estimated support volume, bed contact, thin-wall estimate, bed fit, "
-            "a 0-100 score and actionable issues. Pass target to include its bed size."
+            "Read-only geometric printability report for a built revision: watertightness, "
+            "boundary/non-manifold edges, overhang area, estimated support volume, bed "
+            "contact, thin-wall estimate, bed fit, a 0-100 score and actionable issues. "
+            "Pass target to include its bed size."
         ),
     )
     def printability_check(asset_id: str, target: str = "", revision: str = "") -> dict[str, Any]:

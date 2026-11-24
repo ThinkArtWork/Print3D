@@ -21,7 +21,7 @@ MIT · Python 3.11+ · macOS / Linux / Windows · [使用手册](docs/MANUAL.md)
 | **模型生成** | 云端：腾讯混元 3D（`hunyuan`）、Tripo AI（`tripo`）；本地部署：`generate_local`；本机 Blender：`blender_run` 执行 bpy 脚本生成 mesh |
 | **资产与版本** | 每个资产保留多个 revision、脚本、参考图和检查结果；四视图 PNG 和可旋转的 HTML 查看器 |
 | **工程图** | 从 STEP 投影第三角四视图，导出 SVG / DXF，带隐藏线 |
-| **可打印性** | 悬垂、支撑体积、薄壁、热床接触、0–100 评分，以及 24 向摆放排序 |
+| **可打印性** | 水密性、悬垂、支撑体积、薄壁、热床接触、0–100 评分，以及 24 向摆放排序 |
 | **切片** | 调用 OrcaSlicer CLI，可覆盖层高、填充、墙数、温度、流量、压力提前、线宽、风扇 |
 | **打印** | Moonraker/Klipper、OctoPrint、Bambu LAN、PrusaLink、通用 HTTP；支持多工具头和多材料槽 |
 | **安全** | 工作区路径沙箱、脚本静态审查 + 子进程资源限额、写操作确认串、密钥脱敏 |
@@ -100,7 +100,7 @@ export OPENAI_API_KEY=...         # 概念图 / images provider
 - **建模与生成**：build123d 参数化 CAD；腾讯混元 3D、Tripo AI 云端生成；TripoSR、Hunyuan3D、ComfyUI 等本地部署模型（只要能写出 STL）；本机 Blender 通过 `blender_run` 执行 bpy 脚本生成 mesh。
 - **复杂造型**：有机雕刻、角色和复杂曲面可走 Blender bpy（`blender_run`）或 mesh（`mesh_fit`）路径；这类工作流比参数化建模更复杂，效果取决于 Agent 和 Blender 脚本。
 - **资产能力**：版本管理、四视图预览、交互式 HTML 查看器、SVG/DXF 工程图、STL/STEP/脚本导出。
-- **可打印性**：悬垂与支撑估计、薄壁检查、热床接触、摆放评分和 24 向排序。
+- **可打印性**：水密性与开放边检查、悬垂与支撑估计、薄壁检查、热床接触、摆放评分和 24 向排序。
 - **切片与打印**：OrcaSlicer；Moonraker/Klipper（含 Snapmaker U1 实机验证）、OctoPrint、Bambu LAN、PrusaLink、通用 HTTP；多工具头/多材料槽。
 - **平台与 Agent**：macOS、Linux、Windows 10/11 x64；Python 3.11+；MCP stdio 与 streamable HTTP；DSH、Claude Desktop、Cursor 等 Agent。
 

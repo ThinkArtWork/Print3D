@@ -546,6 +546,7 @@ orientation_plan(asset_id, target="u1", limit=3)
 
 `printability_check` reports:
 
+- watertightness: `watertight`, `boundary_edges`, `nonmanifold_edges`, `degenerate_triangles`; a non-watertight mesh raises a `not_watertight` error and loses points;
 - bbox / volume;
 - overhang area above 45° and its share;
 - support volume estimate;

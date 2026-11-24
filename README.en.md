@@ -21,7 +21,7 @@ MIT · Python 3.11+ · macOS / Linux / Windows · [Manual](docs/MANUAL.en.md) ·
 | **Model generation** | Cloud: Tencent Hunyuan 3D (`hunyuan`), Tripo AI (`tripo`); self-hosted: `generate_local`; local Blender: `blender_run` executes a bpy script to build a mesh |
 | **Assets and revisions** | Every asset keeps revisions, scripts, references and checks; four-view PNG and an interactive HTML viewer |
 | **Drawings** | Third-angle four-view projection from STEP, exported as SVG / DXF with hidden lines |
-| **Printability** | Overhang and support estimates, thin walls, bed contact, 0–100 score, and 24-orientation ranking |
+| **Printability** | Watertightness, overhangs and support estimates, thin walls, bed contact, 0–100 score, and 24-orientation ranking |
 | **Slicing** | Drives the OrcaSlicer CLI, with overrides for layer height, infill, walls, temperatures, flow, pressure advance, line width and fans |
 | **Printing** | Moonraker/Klipper, OctoPrint, Bambu LAN, PrusaLink and generic HTTP; multiple toolheads and material slots |
 | **Safety** | Workspace path sandbox, static script checks plus subprocess limits, exact confirmation strings, redacted secrets |
@@ -100,7 +100,7 @@ Self-hosted models need no cloud key: configure the command under `providers.loc
 - **Modelling and generation**: build123d parametric CAD; Tencent Hunyuan 3D and Tripo AI in the cloud; TripoSR, Hunyuan3D, ComfyUI and other self-hosted models that can write an STL; local Blender via `blender_run` executing a bpy script.
 - **Complex shapes**: organic sculpting, characters and complex surfaces can go through the Blender bpy (`blender_run`) or mesh (`mesh_fit`) path; these workflows are more involved than parametric modelling and depend on the Agent and the Blender script.
 - **Assets**: revisions, four-view previews, interactive HTML viewer, SVG/DXF drawings, STL/STEP/script export.
-- **Printability**: overhang and support estimates, thin-wall checks, bed contact, placement scoring and 24-orientation ranking.
+- **Printability**: watertightness and open-edge checks, overhang and support estimates, thin-wall checks, bed contact, placement scoring and 24-orientation ranking.
 - **Slicing and printing**: OrcaSlicer; Moonraker/Klipper (including hardware-verified Snapmaker U1), OctoPrint, Bambu LAN, PrusaLink, generic HTTP; multiple toolheads and material slots.
 - **Platforms and Agents**: macOS, Linux and Windows 10/11 x64; Python 3.11+; MCP over stdio or streamable HTTP; DSH, Claude Desktop, Cursor and other Agents.
 

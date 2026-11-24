@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from .mesh import mesh_stats
 from .preview import load_stl
 
 OVERHANG_COS = math.cos(math.radians(45.0))
@@ -231,6 +232,7 @@ def printability_report(
     """Run printability checks and return a score plus actionable issues."""
     metrics = mesh_metrics(triangles, normals, areas)
     wall = estimate_wall_thickness(triangles, normals, areas, threshold_mm=thin_wall_mm)
+    solid = mesh_stats(triangles)
     bbox = metrics["bbox_mm"]
     issues: list[dict[str, str]] = []
 
@@ -239,6 +241,18 @@ def printability_report(
 
     if not metrics["triangles"]:
         issue("error", "empty", "The mesh has no triangles.", "Rebuild the model.")
+    if not solid["watertight"]:
+        issue(
+            "error",
+            "not_watertight",
+            (
+                "The mesh is not watertight "
+                f"({solid['boundary_edges']} boundary edge(s), "
+                f"{solid['nonmanifold_edges']} non-manifold edge(s), "
+                f"{solid['degenerate_triangles']} degenerate triangle(s))."
+            ),
+            "Close the surface before slicing: merge solids, repair the mesh, or fix the model script.",
+        )
     if bed is not None and (bbox[0] > bed[0] + 1e-6 or bbox[1] > bed[1] + 1e-6):
         issue(
             "error",
@@ -287,6 +301,10 @@ def printability_report(
     score = max(0.0, min(100.0, score))
     return {
         "score": round(score, 1),
+        "watertight": solid["watertight"],
+        "boundary_edges": solid["boundary_edges"],
+        "nonmanifold_edges": solid["nonmanifold_edges"],
+        "degenerate_triangles": solid["degenerate_triangles"],
         "metrics": metrics,
         "wall": wall,
         "bed_mm": list(bed) if bed else None,
