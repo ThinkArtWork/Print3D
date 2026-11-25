@@ -4,9 +4,15 @@
 
 **Self-hosted 3D printing MCP server — from a prompt to a part on the printer.**
 
-MIT · Python 3.11+ · macOS / Linux / Windows · [Manual](https://github.com/ThinkArtWork/Print3D/blob/main/docs/MANUAL.en.md) · [中文](https://github.com/ThinkArtWork/Print3D/blob/main/README.md)
+[![PyPI version](https://img.shields.io/pypi/v/Print3D?label=PyPI)](https://pypi.org/project/Print3D/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](https://github.com/ThinkArtWork/Print3D/blob/main/LICENSE)
+
+macOS / Linux / Windows · [Manual](https://github.com/ThinkArtWork/Print3D/blob/main/docs/MANUAL.en.md) · [中文](https://github.com/ThinkArtWork/Print3D/blob/main/README.md)
 
 </div>
+
+> **Available on [PyPI](https://pypi.org/project/Print3D/).** No repository clone is needed; run it directly with `uvx` or see [Install](https://github.com/ThinkArtWork/Print3D/blob/main/README.en.md#install).
 
 ![120 × 80 × 22 mm three-compartment tray](https://raw.githubusercontent.com/ThinkArtWork/Print3D/main/docs/images/parts-tray.png)
 

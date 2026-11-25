@@ -6,9 +6,15 @@
 
 **自托管 3D 打印 MCP 服务 —— 从一句话到真正打印出来的零件。**
 
-MIT · Python 3.11+ · macOS / Linux / Windows · [使用手册](https://github.com/ThinkArtWork/Print3D/blob/main/docs/MANUAL.md) · [English](https://github.com/ThinkArtWork/Print3D/blob/main/README.en.md)
+[![PyPI 版本](https://img.shields.io/pypi/v/Print3D?label=PyPI)](https://pypi.org/project/Print3D/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](https://github.com/ThinkArtWork/Print3D/blob/main/LICENSE)
+
+macOS / Linux / Windows · [使用手册](https://github.com/ThinkArtWork/Print3D/blob/main/docs/MANUAL.md) · [English](https://github.com/ThinkArtWork/Print3D/blob/main/README.en.md)
 
 </div>
+
+> **已发布到 [PyPI](https://pypi.org/project/Print3D/)。** 无需克隆仓库，可直接使用 `uvx` 运行；详见[安装](https://github.com/ThinkArtWork/Print3D/blob/main/README.md#安装)。
 
 ![120 × 80 × 22 mm 三格收纳盘](https://raw.githubusercontent.com/ThinkArtWork/Print3D/main/docs/images/parts-tray.png)
 
