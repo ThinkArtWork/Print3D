@@ -8,7 +8,13 @@
 > - 只想尽快跑起来：用 §1.2 的 Agent 安装提示词，或按 §1.3 手动安装。
 > - 需要全部切片参数与打印机字段：见 §8、§9；排错见 §12。
 >
-> 文中命令默认在仓库根目录执行；`print3d` 指仓库虚拟环境里的 `.venv/bin/print3d`（Windows 是 `.venv\Scripts\print3d.exe`），用 `uv run print3d` 也可以。
+> 文中命令统一写 `print3d`：
+>
+> - 已用 `uv tool install print3d==0.1.1` 安装：直接运行；
+> - 只想临时运行：用 `uvx --python 3.11 --from print3d==0.1.1 print3d ...`；
+> - 从源码开发：在仓库根目录把 `print3d` 换成 `uv run print3d`。
+>
+> 只有源码安装需要在仓库根目录执行；PyPI 安装可以在任意目录运行。
 
 ## 目录
 
@@ -54,23 +60,44 @@
 你是我的安装助手。请在这台 macOS / Linux / Windows 机器上安装 Print3D MCP 服务：
 
 仓库：https://github.com/ThinkArtWork/Print3D
-依赖：Python 3.11+、git、uv。
+依赖：Python 3.11+、uv；源码安装另需 git。
 
 1. 检查系统和依赖；缺 uv 就按官方方式安装；Python 版本不够就告诉我，不要擅自改系统 Python。
-2. 克隆仓库到合适目录，执行 uv sync 和 uv run print3d init。
-3. 运行 uv run print3d capabilities，报告 CAD、渲染、切片器、打印机状态。
+2. 运行 uvx --python 3.11 --from print3d==0.1.1 print3d init。
+3. 运行 print3d capabilities（源码安装用 uv run print3d capabilities），报告 CAD、渲染、切片器、打印机状态。
 4. 检查 OrcaSlicer 和 Blender 是否安装；缺失只报告，不要自动下载大文件。
-5. 根据我的 MCP 宿主（DSH / Claude Desktop / Cursor）生成 stdio 配置；command 使用仓库内虚拟环境 print3d 的绝对路径（macOS/Linux 是 .venv/bin/print3d，Windows 是 .venv\Scripts\print3d.exe），写入前先给我确认。
+5. 根据我的 Agent（DSH / Claude Desktop / Codex / WorkBuddy / Trae）生成 stdio 配置，优先用 uvx；如果 GUI 找不到 uvx，用 command -v uvx 的绝对路径。写入前先给我确认。
 6. 不要索要 API key，核心功能不需要。最后给我一条测试提示词。
 ```
 
-### 1.3 从源码安装
+### 1.3 从 PyPI 安装（推荐）
+
+需要 Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)。不需要 clone 仓库。
+
+临时运行，不污染全局环境：
+
+```bash
+uvx --python 3.11 --from print3d==0.1.1 print3d init
+uvx --python 3.11 --from print3d==0.1.1 print3d capabilities
+```
+
+`uvx` 首次启动会下载 Python/CAD 依赖（约 250 MB），可能超过某些 Agent 的默认启动超时。需要经常使用时，改成持久安装：
+
+```bash
+uv tool install print3d==0.1.1
+print3d init
+print3d capabilities
+```
+
+`uv tool install` 会把 `print3d` 放进 `~/.local/bin`。从 GUI 启动的 Agent 可能没有这个目录在 PATH 上，配置时要写 `command -v print3d` 的绝对路径（Windows 用 `print3d.exe`）。
+
+#### 从源码安装（开发）
 
 ```bash
 git clone https://github.com/ThinkArtWork/Print3D.git
 cd Print3D
 uv sync
-uv run print3d version
+uv run print3d init
 ```
 
 Windows 用同一套命令，入口换成 `.venv\Scripts\`（PowerShell）：
@@ -79,7 +106,7 @@ Windows 用同一套命令，入口换成 `.venv\Scripts\`（PowerShell）：
 git clone https://github.com/ThinkArtWork/Print3D.git
 cd Print3D
 uv sync
-.\.venv\Scripts\print3d.exe version
+.\.venv\Scripts\print3d.exe init
 ```
 
 `uv sync` 会创建 `.venv` 并安装运行依赖。要跑 lint，加上开发依赖：
@@ -92,20 +119,20 @@ uv run ruff check src
 > Windows 上如果 `OrcaSlicer` 的 `--help` 没有输出，不影响切片：Print3D 只在 `--help` 有内容时才据此判断 CLI 能力，静默时按“待验证”处理并继续。<br>
 > Windows 需要 64 位 Python；`cadquery-ocp-novtk` 没有 win_arm64 wheel，Windows on ARM 目前不行。
 
-> Print3D 尚未发布到 PyPI。在首个 GitHub Release 出现之前，不要用 `pipx install print3d`；源码安装是唯一可靠的方式。Release 发布后，也可以 `uv tool install .` 或 `pipx install .` 把命令装到 PATH。
+源码安装只用于开发。普通用户优先用上面的 `uvx` 或 `uv tool install`。
 
 ### 1.4 初始化工作区
 
 ```bash
-uv run print3d init
-uv run print3d capabilities
+print3d init
+print3d capabilities
 ```
 
 默认工作区是 `~/.print3d`。`init` 创建目录骨架和 `config.json`，**不写任何密钥**，也不会覆盖已有配置；确实要重写时加 `--force`。
 
 ```bash
 # 多实例 / 测试：换一个工作区
-uv run print3d init --workspace /path/to/print3d-workspace
+print3d init --workspace /path/to/print3d-workspace
 
 # 或者用环境变量
 export PRINT3D_WORKSPACE=/path/to/print3d-workspace
@@ -147,8 +174,8 @@ Print3D 是一个标准 MCP server，本身没有 UI。宿主（DSH、Claude Des
 {
   "mcpServers": {
     "print3d": {
-      "command": "/absolute/path/to/Print3D/.venv/bin/print3d",
-      "args": ["serve", "--stdio"],
+      "command": "uvx",
+      "args": ["--python", "3.11", "--from", "print3d==0.1.1", "print3d", "serve", "--stdio"],
       "env": {
         "PRINT3D_WORKSPACE": "/absolute/path/to/.print3d"
       }
@@ -157,24 +184,29 @@ Print3D 是一个标准 MCP server，本身没有 UI。宿主（DSH、Claude Des
 }
 ```
 
-两个容易踩的点：
+三个容易踩的点：
 
-- **命令必须是绝对路径**。宿主不会替你 `cd` 到仓库，也不会展开 `~`。Windows 上把 `command` 换成本仓库的 `.venv\Scripts\print3d.exe` 绝对路径，JSON 里反斜杠要写成 `\\`。
+- **`command` 必须能被宿主找到**：放在 PATH 上，或写绝对路径；宿主不会替你 `cd`，也不会展开 `~`。macOS 上 `uvx` 通常在 `~/.local/bin`，从 GUI 启动的宿主可能没有这个 PATH，这时用 `command -v uvx` 的结果。Windows 用 `uvx.exe` 的绝对路径，JSON 里反斜杠要写成 `\\`。
+- **首次启动会下载依赖**，约 250 MB，可能超过宿主默认超时；可以先 `uv tool install print3d==0.1.1` 预热，再把 `command` 改成 `print3d`，`args` 改成 `["serve", "--stdio"]`。
 - 如果希望工作区跟着项目走，把 `PRINT3D_WORKSPACE` 指到项目的 `.print3d`；否则默认用 `~/.print3d`（Windows 是 `%USERPROFILE%\.print3d`）。
 
 ### 2.2 DSH
 
-在 DSH 的 `Settings → MCP` 里新增 stdio 服务器，命令填上面的绝对路径。若当前 DSH 版本没有 MCP 设置页，直接改 profile 的 `cordis.patch.yml`，条目 `id` 用 `mcp-manager`，改完重启 DSH。
+首发提供 DSH bundle `print3d-mcp`。在 DSH 的 Plugins / 扩展页安装后，它会注册一个名为 `print3d` 的 stdio MCP server；bundle 只写 MCP 配置，不安装 Python，所以本机仍需有 `uvx`。
+
+安装前先确认 DSH GUI 能找到 `uvx`；如果找不到，在 bundle 的配置里把 `command` 改成绝对路径。旧版 `@local/print3d-mcp`（source 指向仓库 `dsh-print3d-mcp/`）如果显示 `missing`，先移除再装新包，不要让两个条目并存。
+
+不使用 bundle 时，也可以在 DSH 的 `Settings → MCP` 里新增 stdio 服务器，配置同 §2.1。若当前 DSH 版本没有 MCP 设置页，再手动改 profile 的 `cordis.patch.yml`，条目 `id` 用 `mcp-manager`，改完重启 DSH；这是兜底方式，不要让安装器直接改 profile。
 
 ### 2.3 streamable HTTP
 
 ```bash
 # 只监听本机
-uv run print3d serve --http
+print3d serve --http
 
 # 从别的机器访问：必须先设置 token
 export PRINT3D_TOKEN="$(openssl rand -hex 32)"
-uv run print3d serve --http --host 0.0.0.0 --port 8765
+print3d serve --http --host 0.0.0.0 --port 8765
 ```
 
 默认地址是 `http://127.0.0.1:8765/mcp`。规则：
@@ -277,7 +309,7 @@ def build_part():
 想快速验证脚本，可以绕过资产库直接跑：
 
 ```bash
-uv run print3d cad run model.py --workdir /tmp/print3d-build
+print3d cad run model.py --workdir /tmp/print3d-build
 ```
 
 它会在 `/tmp/print3d-build` 写出 `model.stl` / `model.step`，并打印同样的 `checks`。适合调几何，不会创建资产，也不会出现在 `asset_list` 里。
@@ -986,6 +1018,22 @@ G-code 留在工作区，可以自己拷走或让切片器复核。Print3D 不�
 
 ### 15.1 升级
 
+PyPI / `uv tool` 安装：
+
+```bash
+uv tool upgrade print3d
+```
+
+如果要升到某个精确版本，重新安装并覆盖：
+
+```bash
+uv tool install print3d==<new-version> --force
+```
+
+用 `uvx` 的配置里，把 `--from print3d==<version>` 改成新版本，然后重启宿主。
+
+源码安装：
+
 ```bash
 cd Print3D
 git pull
@@ -993,7 +1041,7 @@ uv sync --extra dev
 uv run python -m pytest -q
 ```
 
-重启宿主，让它重新拉起 `print3d serve --stdio`；如果更新了 Print3D 本身，先重新 `uv sync`，再重启。
+重启宿主，让它重新拉起 `print3d serve --stdio`。升级后先用 `print3d version` 和 `capabilities()` 确认版本与能力。
 
 ### 15.2 备份
 
@@ -1009,12 +1057,17 @@ uv run python -m pytest -q
 ### 15.3 卸载
 
 ```bash
+# PyPI / uv tool 安装
+uv tool uninstall print3d
+
 # 源码安装：删掉仓库和虚拟环境
 rm -rf /path/to/Print3D
 
 # 工作区（确认不再需要资产后再删）
 rm -rf ~/.print3d
 ```
+
+`uvx` 不会全局安装，通常只需删掉宿主配置；要清缓存可用 `uv cache clean print3d`。
 
 如果 key 曾进入过共享环境或日志，去 provider 控制台**轮换**，删文件不算处置。
 

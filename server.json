@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ThinkArtWork/print3d",
+  "title": "Print3D",
+  "description": "Self-hosted 3D printing MCP server: CAD, mesh generation, slicing, and printer control.",
+  "version": "0.1.1",
+  "websiteUrl": "https://github.com/ThinkArtWork/Print3D",
+  "repository": {
+    "url": "https://github.com/ThinkArtWork/Print3D",
+    "source": "github",
+    "id": "1456691114"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "print3d",
+      "version": "0.1.1",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--python",
+          "value": "3.11"
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve",
+          "valueHint": "subcommand"
+        },
+        {
+          "type": "named",
+          "name": "--stdio"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "Print3D"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Self-hosted 3D printing MCP server: generate, edit, render, slice, print."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Print3D project" }]
+authors = [{ name = "ThinkArtWork" }]
 keywords = ["mcp", "3d-printing", "cad", "slicer", "klipper"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -42,8 +42,34 @@ dev = [
 [project.scripts]
 print3d = "print3d.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/ThinkArtWork/Print3D"
+Repository = "https://github.com/ThinkArtWork/Print3D"
+Issues = "https://github.com/ThinkArtWork/Print3D/issues"
+Documentation = "https://github.com/ThinkArtWork/Print3D/blob/main/docs/MANUAL.md"
+
+[tool.hatch.version]
+# Single source of truth: the version lives in src/print3d/__init__.py.
+path = "src/print3d/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/print3d"]
+
+[tool.hatch.build.targets.sdist]
+# 发行包只允许运行时代码和用户文档；tests/、AGENTS.md、migration/、
+# 视频/模型/海报等本地材料不得进入 sdist。
+only-include = [
+  "/src/print3d",
+  "/docs/MANUAL.md",
+  "/docs/MANUAL.en.md",
+  "/docs/images/parts-tray.png",
+  "/README.md",
+  "/README.en.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+# Hatchling 会强制把仓库根的 .gitignore 放进 sdist，exclude 无法移除；
+# 因此正式构建必须从 `git archive HEAD` 的干净导出目录执行。
 
 [tool.pytest.ini_options]
 minversion = "8.0"

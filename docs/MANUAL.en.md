@@ -8,7 +8,13 @@
 > - If you just want it running: use the agent install prompt in §1.2, or install manually per §1.3.
 > - Need every slicing parameter and printer field: see §8 and §9; troubleshooting is in §12.
 >
-> Commands below are run from the repository root; `print3d` means `.venv/bin/print3d` inside the repository virtualenv (`.venv\Scripts\print3d.exe` on Windows) — `uv run print3d` works too.
+> Commands below are written as `print3d`:
+>
+> - installed with `uv tool install print3d==0.1.1`: run it directly;
+> - one-off runs: use `uvx --python 3.11 --from print3d==0.1.1 print3d ...`;
+> - source development: from the repository root, replace `print3d` with `uv run print3d`.
+>
+> Only a source install needs the repository root; a PyPI install works from any directory.
 
 ## Table of contents
 
@@ -54,23 +60,44 @@ You do not have to type every command yourself. Copy the block below (GitHub has
 You are my installation assistant. Install the Print3D MCP server on this macOS / Linux / Windows machine:
 
 Repository: https://github.com/ThinkArtWork/Print3D
-Dependencies: Python 3.11+, git, uv.
+Requirements: Python 3.11+, uv; git only for a source install.
 
 1. Check the system and dependencies; if uv is missing, install it the official way; if Python is too old, tell me — do not change the system Python on your own.
-2. Clone the repository to a suitable directory, then run uv sync and uv run print3d init.
-3. Run uv run print3d capabilities and report CAD, rendering, slicer and printer status.
+2. Run: uvx --python 3.11 --from print3d==0.1.1 print3d init.
+3. Run print3d capabilities (or uv run print3d capabilities for a source install) and report CAD, rendering, slicer and printer status.
 4. Check whether OrcaSlicer and Blender are installed; if missing, only report it — do not download large files automatically.
-5. Generate a stdio config for my MCP host (DSH / Claude Desktop / Cursor); set command to the absolute path of print3d inside the repository virtualenv (.venv/bin/print3d on macOS/Linux, .venv\Scripts\print3d.exe on Windows), and show it to me for confirmation before writing.
+5. Generate a stdio config for my Agent (DSH / Claude Desktop / Codex / WorkBuddy / Trae), preferring uvx. If the GUI cannot find uvx, use the absolute path from command -v uvx. Show me the config before writing.
 6. Do not ask for API keys; core features do not need one. Finally, give me a test prompt.
 ```
 
-### 1.3 Installing from source
+### 1.3 Installing from PyPI (recommended)
+
+You need Python 3.11+ and [uv](https://docs.astral.sh/uv/). No repository clone is required.
+
+One-off runs, without installing globally:
+
+```bash
+uvx --python 3.11 --from print3d==0.1.1 print3d init
+uvx --python 3.11 --from print3d==0.1.1 print3d capabilities
+```
+
+`uvx` downloads Python/CAD dependencies on first start (about 250 MB), which can exceed some Agents' default startup timeout. For regular use, install it persistently instead:
+
+```bash
+uv tool install print3d==0.1.1
+print3d init
+print3d capabilities
+```
+
+`uv tool install` puts `print3d` in `~/.local/bin`. An Agent launched from a GUI may not have that directory on `PATH`; in that case use the absolute path from `command -v print3d` (`print3d.exe` on Windows).
+
+#### Install from source (development)
 
 ```bash
 git clone https://github.com/ThinkArtWork/Print3D.git
 cd Print3D
 uv sync
-uv run print3d version
+uv run print3d init
 ```
 
 Windows uses the same commands; only the entry point moves to `.venv\Scripts\` (PowerShell):
@@ -79,7 +106,7 @@ Windows uses the same commands; only the entry point moves to `.venv\Scripts\` (
 git clone https://github.com/ThinkArtWork/Print3D.git
 cd Print3D
 uv sync
-.\.venv\Scripts\print3d.exe version
+.\.venv\Scripts\print3d.exe init
 ```
 
 `uv sync` creates `.venv` and installs the runtime dependencies. To run lint, add the dev dependencies:
@@ -92,20 +119,20 @@ uv run ruff check src
 > On Windows, an OrcaSlicer `--help` that prints nothing does not break slicing: Print3D only trusts the help text when there is some, and otherwise treats the CLI flags as unverified and carries on.<br>
 > Windows needs 64-bit Python; `cadquery-ocp-novtk` has no win_arm64 wheel, so Windows on ARM is not supported yet.
 
-> Print3D has not been published to PyPI yet. Until the first GitHub Release appears, do not use `pipx install print3d`; installing from source is the only reliable way. Once a release is out, you can also `uv tool install .` or `pipx install .` to put the command on your PATH.
+A source install is for development only. Regular users should use `uvx` or `uv tool install` above.
 
 ### 1.4 Initialising the workspace
 
 ```bash
-uv run print3d init
-uv run print3d capabilities
+print3d init
+print3d capabilities
 ```
 
 The default workspace is `~/.print3d`. `init` creates the directory skeleton and `config.json`, **writes no secrets**, and does not overwrite existing configuration; add `--force` when you really want it rewritten.
 
 ```bash
 # Multiple instances / tests: use another workspace
-uv run print3d init --workspace /path/to/print3d-workspace
+print3d init --workspace /path/to/print3d-workspace
 
 # Or use an environment variable
 export PRINT3D_WORKSPACE=/path/to/print3d-workspace
@@ -147,8 +174,8 @@ Add an entry to the host's MCP configuration:
 {
   "mcpServers": {
     "print3d": {
-      "command": "/absolute/path/to/Print3D/.venv/bin/print3d",
-      "args": ["serve", "--stdio"],
+      "command": "uvx",
+      "args": ["--python", "3.11", "--from", "print3d==0.1.1", "print3d", "serve", "--stdio"],
       "env": {
         "PRINT3D_WORKSPACE": "/absolute/path/to/.print3d"
       }
@@ -157,24 +184,29 @@ Add an entry to the host's MCP configuration:
 }
 ```
 
-Two things people trip over:
+Three things people trip over:
 
-- **The command must be an absolute path.** The host will not `cd` into the repository for you, and will not expand `~`. On Windows, point `command` at the repository's `.venv\Scripts\print3d.exe` and write backslashes as `\\` in the JSON.
+- **The host must be able to find `command`**: either on `PATH` or as an absolute path. The host will not `cd` for you and will not expand `~`. On macOS `uvx` usually lives in `~/.local/bin`, which a GUI-launched host may not have on `PATH`; use the output of `command -v uvx` in that case. On Windows use the absolute path to `uvx.exe` and write backslashes as `\\` in JSON.
+- **The first start downloads dependencies**, about 250 MB, which can exceed the host's default timeout. Warm it with `uv tool install print3d==0.1.1`, then set `command` to `print3d` and `args` to `["serve", "--stdio"]`.
 - If you want the workspace to follow the project, point `PRINT3D_WORKSPACE` at the project's `.print3d`; otherwise `~/.print3d` is used (`%USERPROFILE%\.print3d` on Windows).
 
 ### 2.2 DSH
 
-In DSH, add a stdio server under `Settings → MCP` and put the absolute path above in the command field. If your DSH version has no MCP settings page, edit the profile's `cordis.patch.yml` directly, using `mcp-manager` as the entry `id`, then restart DSH.
+The first release provides a DSH bundle named `print3d-mcp`. Installing it from DSH's Plugins / extensions page registers a stdio MCP server called `print3d`. The bundle only writes MCP configuration; it does not install Python, so `uvx` must already exist on the machine.
+
+Before installing, confirm that the DSH GUI can find `uvx`; if it cannot, change `command` in the bundle configuration to an absolute path. If the old `@local/print3d-mcp` (source pointing at the repository's `dsh-print3d-mcp/`) shows `missing`, remove it before installing the new package; do not keep both entries.
+
+Without the bundle, add a stdio server under DSH's `Settings → MCP` using the configuration in §2.1. If your DSH version has no MCP settings page, fall back to editing the profile's `cordis.patch.yml`, using `mcp-manager` as the entry `id`, then restart DSH. This is a manual fallback; the installer should not edit the profile directly.
 
 ### 2.3 streamable HTTP
 
 ```bash
 # listen on loopback only
-uv run print3d serve --http
+print3d serve --http
 
 # access from another machine: set a token first
 export PRINT3D_TOKEN="$(openssl rand -hex 32)"
-uv run print3d serve --http --host 0.0.0.0 --port 8765
+print3d serve --http --host 0.0.0.0 --port 8765
 ```
 
 The default address is `http://127.0.0.1:8765/mcp`. Rules:
@@ -277,7 +309,7 @@ If any one of them is off, fix the script before slicing; do not gamble in the s
 To check a script quickly, you can bypass the asset store and run it directly:
 
 ```bash
-uv run print3d cad run model.py --workdir /tmp/print3d-build
+print3d cad run model.py --workdir /tmp/print3d-build
 ```
 
 It writes `model.stl` / `model.step` into `/tmp/print3d-build` and prints the same `checks`. Good for tuning geometry; it creates no asset and does not show up in `asset_list`.
@@ -996,6 +1028,22 @@ The G-code stays in the workspace; you can copy it out yourself or have the slic
 
 ### 15.1 Upgrade
 
+PyPI / `uv tool` install:
+
+```bash
+uv tool upgrade print3d
+```
+
+To move to an exact version, reinstall over the old one:
+
+```bash
+uv tool install print3d==<new-version> --force
+```
+
+With `uvx`, change `--from print3d==<version>` in the host config to the new version, then restart the host.
+
+Source install:
+
 ```bash
 cd Print3D
 git pull
@@ -1003,7 +1051,7 @@ uv sync --extra dev
 uv run python -m pytest -q
 ```
 
-Restart the host so that it relaunches `print3d serve --stdio`. If you updated Print3D itself, run `uv sync` again, then restart.
+Restart the host so that it relaunches `print3d serve --stdio`. After upgrading, check `print3d version` and `capabilities()` to confirm the version and capabilities.
 
 ### 15.2 Backup
 
@@ -1019,12 +1067,17 @@ What needs backing up:
 ### 15.3 Uninstall
 
 ```bash
+# PyPI / uv tool install
+uv tool uninstall print3d
+
 # source install: delete the repo and virtualenv
 rm -rf /path/to/Print3D
 
 # workspace (delete only after confirming you no longer need the assets)
 rm -rf ~/.print3d
 ```
+
+`uvx` installs nothing globally, so usually only the host entry needs removing; clear its cache with `uv cache clean print3d` if needed.
 
 If a key has ever been in a shared environment or a log, **rotate** it in the provider console; deleting the file is not remediation.
 
